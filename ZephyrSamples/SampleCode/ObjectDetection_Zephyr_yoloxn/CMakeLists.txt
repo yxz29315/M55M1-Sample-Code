@@ -1,0 +1,193 @@
+# Copyright 2021-2022 Arm Limited and/or its affiliates <open-source-office@arm.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+cmake_minimum_required(VERSION 3.20.0)
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+set(APP_DEVICE_DIR src/Device)
+set(APP_MODEL_DIR src/Model)
+set(APP_SRC_DIR src/)
+set(APP_NPU_DIR src/NPU)
+set(APP_PROFILER_DIR src/ProfilerCounter)
+set(APP_BYTETRACK_DIR src/ByteTrack)
+set(APP_EIGEN_DIR ../../ThirdParty/eigen)
+set(APP_THIRDPARTY_MLEVK_DIR ../../ThirdParty/ml-embedded-evaluation-kit)
+set(APP_THIRDPARTY_OMV ../../ThirdParty/openmv)
+
+project(ObjectDetection-Zephyr-yoloxn)
+
+target_include_directories(app PRIVATE
+    ${APP_DEVICE_DIR}/include
+)
+
+target_include_directories(app PRIVATE
+    ${APP_PROFILER_DIR}/include
+)
+
+target_include_directories(app PRIVATE
+    ${APP_NPU_DIR}/include
+)
+
+target_include_directories(app PRIVATE
+    ${APP_MODEL_DIR}/include
+)
+
+target_include_directories(app PRIVATE
+    ${APP_BYTETRACK_DIR}/include
+)
+
+target_include_directories(app PRIVATE
+    ${APP_EIGEN_DIR}
+)
+
+target_include_directories(app PRIVATE
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/application/api/common/include
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/log/include
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/profiler/include
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/math/include
+)
+
+target_include_directories(app PRIVATE
+    ${APP_THIRDPARTY_OMV}/omv/imlib
+    ${APP_THIRDPARTY_OMV}/omv/alloc
+    ${APP_THIRDPARTY_OMV}/omv/common
+    ${APP_THIRDPARTY_OMV}/omv/Lib
+)
+
+target_compile_definitions(app PRIVATE
+    FS_FATFS_WINDOW_ALIGNMENT=32
+    NVT_DCACHE_ON=1
+    ARM_NPU
+)
+
+if(CONFIG_APP_OD_PROFILE_ENABLED)
+    target_compile_definitions(app PRIVATE __PROFILE__)
+endif()
+
+if(CONFIG_APP_OD_UVC_SHOW_IMAGE)
+    target_compile_definitions(app PRIVATE __USE_UVC__)
+endif()
+
+if(CONFIG_APP_OD_MODEL_FROM_SD)
+    target_compile_definitions(app PRIVATE __LOAD_MODEL_FROM_SD__)
+endif()
+
+if(CONFIG_APP_OD_FORMATTED_MESSAGE)
+    target_compile_definitions(app PRIVATE __FORMATTED_OD_MESSAGE__)
+endif()
+
+if(CONFIG_APP_OD_USING_HYPERRAM)
+    target_compile_definitions(app PRIVATE __USE_HYPERRAM__)
+endif()
+
+if(CONFIG_APP_OD_LCD_SHOW_IMAGE)
+    target_compile_definitions(app PRIVATE __USE_LCD__)
+endif()
+
+if(CONFIG_LT7381_MPU_PANEL)
+    target_compile_definitions(app PRIVATE __LCD_LT7381_PANEL__)
+endif()
+
+if(CONFIG_FSA506_MPU_PANEL)
+    target_compile_definitions(app PRIVATE __LCD_FSA506_PANEL__)
+endif()
+
+if(CONFIG_ILI9341_SPI_PANEL)
+    target_compile_definitions(app PRIVATE __LCD_ILI9341_PANEL__)
+endif()
+
+if((CONFIG_APP_OD_LCD_SHOW_IMAGE) OR (CONFIG_APP_OD_UVC_SHOW_IMAGE))
+    target_compile_definitions(app PRIVATE __PREVIEW_SUPPORT__)
+endif()
+
+if(CONFIG_CMOS_HM1055_SENSOR)
+    target_compile_definitions(app PRIVATE __CMOS_HM1055_SENSOR__)
+endif()
+
+if(CONFIG_CMOS_GC0308_SENSOR)
+    target_compile_definitions(app PRIVATE __CMOS_GC0308_SENSOR__)
+endif()
+
+if(${BOARD} STREQUAL "numaker_m55m1")
+    target_compile_definitions(app PRIVATE __NUMAKER_M55M1__)
+elseif(${BOARD} STREQUAL "numaker_gai_m55m1")
+    target_compile_definitions(app PRIVATE __NUGESTUREAI_M55M1__)
+endif()
+
+target_sources(app PRIVATE
+    ${APP_SRC_DIR}/main.cpp
+    ${APP_SRC_DIR}/BoardInit.cpp
+    ${APP_SRC_DIR}/ModelFileReader.c
+    ${APP_SRC_DIR}/DetectorPostProcessing.cpp
+    ${APP_SRC_DIR}/InferenceTask.cpp
+)
+
+target_sources(app PRIVATE
+    ${APP_DEVICE_DIR}/HyperRAM/hyperram_code.c
+    ${APP_DEVICE_DIR}/SDCard/sdglue.c
+    ${APP_DEVICE_DIR}/SDCard/diskio_SDH.c
+    ${APP_DEVICE_DIR}/ImageSensor/ImageSensor.c
+    ${APP_DEVICE_DIR}/ImageSensor/Sensor/Sensor_HM1055.c
+    ${APP_DEVICE_DIR}/ImageSensor/Sensor/Sensor_GC0308.c
+    ${APP_DEVICE_DIR}/ImageSensor/Sensor/SWI2C.c
+    ${APP_DEVICE_DIR}/UVC/UVC.c
+    ${APP_DEVICE_DIR}/UVC/descriptors.c
+    ${APP_DEVICE_DIR}/Display/Display.c
+    ${APP_DEVICE_DIR}/Display/drv_pdma.c
+    ${APP_DEVICE_DIR}/Display/Font8_16.c
+    ${APP_DEVICE_DIR}/Display/LCD/LCD_LT7381.c
+    ${APP_DEVICE_DIR}/Display/LCD/LCD_ILI9341.c
+    ${APP_DEVICE_DIR}/Display/LCD/LCD_FSA506.c
+)
+
+target_sources(app PRIVATE
+    ${APP_PROFILER_DIR}/pmu_counter.c
+)
+
+target_sources(app PRIVATE
+    ${APP_NPU_DIR}/ethosu_profiler.c
+)
+
+target_sources(app PRIVATE
+    ${APP_MODEL_DIR}/YoloXnanoNu.cpp
+    ${APP_MODEL_DIR}/yolox_n_nu_HgPerson_full_integer_quant_vela.tflite_class12.cpp
+    ${APP_MODEL_DIR}/Labels.cpp
+)
+
+target_sources(app PRIVATE
+    ${APP_BYTETRACK_DIR}/BYTETracker.cpp
+    ${APP_BYTETRACK_DIR}/kalmanFilter.cpp
+    ${APP_BYTETRACK_DIR}/lapjv.cpp
+    ${APP_BYTETRACK_DIR}/STrack.cpp
+    ${APP_BYTETRACK_DIR}/utils.cpp
+)
+
+target_sources(app PRIVATE
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/application/api/common/source/Model.cpp
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/application/api/common/source/ImageUtils.cpp
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/application/api/common/source/TensorFlowLiteMicro.cpp
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/math/PlatformMath.cpp
+    ${APP_THIRDPARTY_MLEVK_DIR}/source/profiler/Profiler.cpp
+)
+
+target_sources(app PRIVATE
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/spim_hyper.c
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/sdh.c
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/ccap.c
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/hsusbd.c
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/ebi.c
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/pdma.c
+    ${ZEPHYR_NUVOTON_MODULE_DIR}/m55m1x/StdDriver/src/spi.c
+)
+
+target_sources(app PRIVATE
+    ${ZEPHYR_FATFS_MODULE_DIR}/ff.c
+    ${ZEPHYR_FATFS_MODULE_DIR}/option/ffunicode.c
+)
+
+target_link_libraries(app PRIVATE 
+    ${PROJECT_SOURCE_DIR}/${APP_THIRDPARTY_OMV}/omv/Lib/libomv.a
+)
+
+# Add platform specific linker source snippet
+zephyr_linker_sources(SECTIONS sram_non-cache_section.ld)
