@@ -49,17 +49,23 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection */
-#define SPEAKING_VELOCITY_THRESHOLD				(1.2f)   /* Lip movement (px/frame). Lower = more sensitive */
-#define SPEAKING_SMOOTHING_FRAMES				(2)       /* Frames above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES					(6)       /* Hysteresis: frames below before releasing */
-#define MAR_SPEAKING_THRESHOLD  (0.12f)  /* Mouth opening. Trigger on velocity OR MAR (either can detect speaking) */
+/* Speaking detection - tightened to fix "always speaking" */
+#define SPEAKING_VELOCITY_THRESHOLD				(2.0f)   /* Lip movement (px/frame). Higher = less sensitive */
+#define SPEAKING_SMOOTHING_FRAMES				(3)       /* Frames above threshold to trigger */
+#define SPEAKING_RELEASE_FRAMES					(5)       /* Hysteresis: frames below before releasing */
+#define MAR_SPEAKING_THRESHOLD  (0.18f)  /* Mouth opening. Higher = less sensitive. Require BOTH for reliability. */
 
-/* Lip indices: core mouth points - outer contour tends to be more stable when mouth is very open */
-#define LIP_LANDMARK_NUM		(12)
+/* Lip offset: if landmarks appear shifted bottom-left, shift them up-right. Tune per camera/model. */
+#define LIP_OFFSET_X  (4)   /* Pixels to shift right (positive = correct bottom-left shift) */
+#define LIP_OFFSET_Y  (6)   /* Pixels to shift up (positive = correct bottom-left shift) */
+
+/* Lip indices: doubled for finer coverage - full outer + inner mouth contour (~24 points) */
+#define LIP_LANDMARK_NUM		(24)
 static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
-	61, 291, 78, 308, 87, 14,   /* corners, upper/lower center */
-	146, 91, 181, 84, 314, 375  /* outer lip contour - more stable than inner when mouth open */
+	/* Outer lip contour (clockwise from right corner) */
+	61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 185, 40, 39, 37, 0, 267, 269, 270, 409,
+	/* Inner lip - key points for mouth opening */
+	78, 308, 87, 14
 };
 
 typedef enum
@@ -240,7 +246,7 @@ static void omv_init()
 #endif
 }
 
-/* Draw only lip/mouth keypoints - no eyes, cheeks. Points form mouth outline. */
+/* Draw only lip/mouth keypoints - no eyes, cheeks. Apply offset to correct bottom-left shift. */
 static void DrawLipLandmark(
     const std::vector<arm::app::face_landmark::KeypointResult> &results,
 	int posOffsetX,
@@ -254,7 +260,9 @@ static void DrawLipLandmark(
 		int idx = s_i32LipLandmarkIndices[i];
 		if (idx < (int)results.size()) {
 			const auto &kp = results[idx];
-			imlib_draw_circle(drawImg, posOffsetX + kp.m_x, posOffsetY + kp.m_y, 2, lipColor, 1, true);
+			int drawX = posOffsetX + kp.m_x + LIP_OFFSET_X;   /* Shift right to correct offset */
+			int drawY = posOffsetY + kp.m_y - LIP_OFFSET_Y;   /* Shift up to correct offset */
+			imlib_draw_circle(drawImg, drawX, drawY, 2, lipColor, 1, true);
 		}
 	}
 }
@@ -638,8 +646,8 @@ static void DetectFaceLandmark_DrawResult(
 			float mar = ComputeMAR(infFramebuf->results_KP);
 			int storeIdx = (matchedPrev >= 0) ? matchedPrev : i;
 
-			/* Trigger: velocity (lip movement) OR MAR (mouth open) - either indicates speaking */
-			int speakingSignal = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) || (mar > MAR_SPEAKING_THRESHOLD);
+			/* Trigger: BOTH velocity AND MAR - reduces false "always speaking" */
+			int speakingSignal = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) && (mar > MAR_SPEAKING_THRESHOLD);
 
 			if (speakingSignal) {
 				s_i32SpeakingConfirmCount[i] = (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[i] + 1 : SPEAKING_SMOOTHING_FRAMES;
