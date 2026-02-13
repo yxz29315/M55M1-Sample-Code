@@ -49,15 +49,15 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection */
-#define SPEAKING_VELOCITY_THRESHOLD_ON		(2.5f)   /* Per-frame equivalent (we use 2-frame velocity/2) */
-#define SPEAKING_VELOCITY_THRESHOLD_OFF		(1.5f)   /* Dead zone */
-#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger */
-#define SPEAKING_MAR_THRESHOLD_OFF			(0.14f)  /* Mouth closed to release */
-#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Detection runs every 2 frames, so 2 = 4 frames total */
+/* Speaking detection - increased sensitivity to pick up speaking */
+#define SPEAKING_VELOCITY_THRESHOLD_ON		(1.8f)   /* Per-frame equivalent - lower = more sensitive */
+#define SPEAKING_VELOCITY_THRESHOLD_OFF		(1.0f)   /* Dead zone */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.16f)  /* Mouth open to trigger - lower = more sensitive */
+#define SPEAKING_MAR_THRESHOLD_OFF			(0.11f)  /* Mouth closed to release */
+#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Frames above threshold to trigger */
 #define SPEAKING_RELEASE_FRAMES				(3)      /* Consecutive below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(8)      /* Min frames speaking before can release */
-#define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames - reduces jitter sensitivity */
+#define SPEAKING_MIN_DURATION_FRAMES		(6)      /* Min frames speaking before can release */
+#define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames */
 
 /* Landmark smoothing */
 #define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing */
