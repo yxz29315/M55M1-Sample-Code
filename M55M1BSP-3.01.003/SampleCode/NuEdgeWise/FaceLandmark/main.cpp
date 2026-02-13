@@ -49,17 +49,17 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection: lip keypoint velocity threshold (pixels per frame) */
-#define SPEAKING_VELOCITY_THRESHOLD				(2.5f)   /* Higher = less sensitive */
-#define SPEAKING_SMOOTHING_FRAMES				(3)       /* Frames above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES					(4)       /* Frames below threshold before releasing */
-#define MAR_SPEAKING_THRESHOLD  (0.22f)  /* Mouth Aspect Ratio - higher = less sensitive. Require BOTH velocity AND MAR. */
+/* Speaking detection */
+#define SPEAKING_VELOCITY_THRESHOLD				(1.2f)   /* Lip movement (px/frame). Lower = more sensitive */
+#define SPEAKING_SMOOTHING_FRAMES				(2)       /* Frames above threshold to trigger */
+#define SPEAKING_RELEASE_FRAMES					(6)       /* Hysteresis: frames below before releasing */
+#define MAR_SPEAKING_THRESHOLD  (0.12f)  /* Mouth opening. Trigger on velocity OR MAR (either can detect speaking) */
 
-/* MediaPipe Face Mesh lip landmark indices - full mouth contour for better coverage */
-#define LIP_LANDMARK_NUM		(21)
+/* Lip indices: core mouth points - outer contour tends to be more stable when mouth is very open */
+#define LIP_LANDMARK_NUM		(12)
 static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
 	61, 291, 78, 308, 87, 14,   /* corners, upper/lower center */
-	146, 91, 181, 84, 314, 405, 321, 375, 324, 318, 402, 317, 178, 88, 95  /* outer/inner lip contour */
+	146, 91, 181, 84, 314, 375  /* outer lip contour - more stable than inner when mouth open */
 };
 
 typedef enum
@@ -259,16 +259,22 @@ static void DrawLipLandmark(
 	}
 }
 
-/* Mouth Aspect Ratio: vertical mouth opening / horizontal width. High = mouth open (speaking) */
+/* Mouth Aspect Ratio: vertical extent / horizontal extent of lip bbox. High = mouth open (speaking).
+ * Uses all lip points for robustness - less affected by model errors on individual points. */
 static float ComputeMAR(const std::vector<arm::app::face_landmark::KeypointResult> &results_KP)
 {
     if (results_KP.size() < 468) return 0.0f;
-    float x61 = results_KP[61].m_x, y61 = results_KP[61].m_y;
-    float x291 = results_KP[291].m_x, y291 = results_KP[291].m_y;
-    float y78 = results_KP[78].m_y, y14 = results_KP[14].m_y;
-    float horiz = std::sqrt((x291-x61)*(x291-x61) + (y291-y61)*(y291-y61));
-    if (horiz < 1.0f) return 0.0f;
-    float vert = (float)std::fabs(y78 - y14);
+    float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+    for (int i = 0; i < LIP_LANDMARK_NUM; i++) {
+        int idx = s_i32LipLandmarkIndices[i];
+        if (idx >= (int)results_KP.size()) continue;
+        float x = (float)results_KP[idx].m_x, y = (float)results_KP[idx].m_y;
+        if (x < minX) minX = x;  if (x > maxX) maxX = x;
+        if (y < minY) minY = y;  if (y > maxY) maxY = y;
+    }
+    float horiz = maxX - minX;
+    float vert = maxY - minY;
+    if (horiz < 2.0f) return 0.0f;
     return vert / horiz;
 }
 
@@ -315,7 +321,7 @@ static int FindMatchingPrevFace(int curX0, int curY0, int curW, int curH)
         float dx = (float)(curCx - prevCx);
         float dy = (float)(curCy - prevCy);
         float dist = std::sqrt(dx*dx + dy*dy);
-        if (dist < bestDist && dist < (float)(curW + curH) / 2) {  /* Must be within ~face size */
+        if (dist < bestDist && dist < (float)(curW + curH)) {  /* Allow face to move within ~2x face size */
             bestDist = dist;
             bestIdx = j;
         }
@@ -624,12 +630,16 @@ static void DetectFaceLandmark_DrawResult(
 		/* Speaking detection: lip velocity OR mouth opening (MAR) with face matching and hysteresis */
 		if (i < MAX_TRACKED_FACES && infFramebuf->results_KP.size() >= 468) {
 			int matchedPrev = FindMatchingPrevFace(faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+			/* Single face: fallback to slot i when no match (avoids velocity always 0) */
+			if (matchedPrev < 0 && infFramebuf->results_FD.size() == 1) {
+				matchedPrev = (s_asPrevLipState[0].valid) ? 0 : -1;
+			}
 			float lipVelocity = ComputeLipVelocity(infFramebuf->results_KP, matchedPrev, roi.x, roi.y);
 			float mar = ComputeMAR(infFramebuf->results_KP);
 			int storeIdx = (matchedPrev >= 0) ? matchedPrev : i;
 
-			/* Trigger: BOTH lip movement AND mouth open (less false positives) */
-			int speakingSignal = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) && (mar > MAR_SPEAKING_THRESHOLD);
+			/* Trigger: velocity (lip movement) OR MAR (mouth open) - either indicates speaking */
+			int speakingSignal = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) || (mar > MAR_SPEAKING_THRESHOLD);
 
 			if (speakingSignal) {
 				s_i32SpeakingConfirmCount[i] = (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[i] + 1 : SPEAKING_SMOOTHING_FRAMES;
