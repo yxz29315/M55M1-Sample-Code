@@ -49,15 +49,18 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection - lip-relative: MAR + MAR velocity (ignores head movement) */
-#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.012f) /* MAR change over N frames - mouth opening/closing */
-#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.006f) /* Dead zone - lower to release */
-#define SPEAKING_MAR_THRESHOLD_ON			(0.17f)  /* Mouth open to trigger */
+/* Speaking detection - lip-relative: MAR + MAR velocity */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.025f) /* Smoothed MAR change - mouth opening/closing */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.010f) /* Dead zone - lower to release */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger (raised for stability) */
 #define SPEAKING_MAR_THRESHOLD_OFF			(0.12f)  /* Mouth closed to release */
-#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Frames above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES				(3)      /* Consecutive below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(6)      /* Min frames speaking before can release */
+#define SPEAKING_SMOOTHING_FRAMES			(4)      /* Consecutive updates above threshold to trigger */
+#define SPEAKING_RELEASE_FRAMES				(8)      /* Consecutive below to release */
+#define SPEAKING_MIN_DURATION_FRAMES		(12)     /* Min frames speaking before can release */
 #define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames */
+#define MAR_SMOOTHING_ALPHA				(0.22f)  /* Heavy smoothing - reduces head-movement jitter */
+#define BBOX_SMOOTHING_ALPHA				(0.25f)  /* Face bbox EMA - reduces crop jitter */
+#define HEAD_MOVE_THRESHOLD				(0.06f)  /* If bbox center moved > 6% of size, ignore motion */
 
 /* Landmark smoothing */
 #define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing */
@@ -66,14 +69,16 @@
 #define LIP_OFFSET_X  (4)   /* Pixels to shift right */
 #define LIP_OFFSET_Y  (3)   /* Positive = shift down (corrects "too high") */
 
-/* Lip + jaw indices: lip contour + chin (152) for MAR - jaw drops when speaking */
+/* Lip indices: lip contour only. Chin excluded - moves a lot with head rotation causing false triggers. */
 #define LIP_LANDMARK_NUM		(24)
-#define MAR_EXTRA_INDICES_NUM	(1)    /* Chin for jaw-opening cue */
+#define MAR_EXTRA_INDICES_NUM	(0)    /* Chin excluded - use lip-only MAR for head-movement stability */
 static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
 	61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 185, 40, 39, 37, 0, 267, 269, 270, 409,
 	78, 308, 87, 14
 };
+#if MAR_EXTRA_INDICES_NUM > 0
 static const int s_i32MarExtraIndices[MAR_EXTRA_INDICES_NUM] = { 152 };  /* Chin - jaw movement */
+#endif
 
 typedef enum
 {
@@ -96,14 +101,18 @@ typedef struct
 typedef struct {
     float lipX[LIP_LANDMARK_NUM];  /* Relative: for EMA smoothing */
     float lipY[LIP_LANDMARK_NUM];
-    float prevMAR;                 /* Previous MAR for MAR velocity (lip-relative) */
-    int x0, y0, w, h;
+    float prevMAR;                 /* Smoothed MAR from previous detection cycle */
+    float prevPrevMAR;             /* MAR from 2 cycles ago - for velocity over longer window */
+    int prevPrevMARValid;          /* Have we seen 2+ cycles? */
+    int x0, y0, w, h;              /* Raw bbox for matching */
+    int smoothX0, smoothY0, smoothW, smoothH;  /* EMA-smoothed bbox for crop */
     int valid;
 } S_PREV_LIP_STATE;
 static S_PREV_LIP_STATE s_asPrevLipState[MAX_TRACKED_FACES];
 static int s_i32SpeakingConfirmCount[MAX_TRACKED_FACES];
 static int s_i32SpeakingReleaseCount[MAX_TRACKED_FACES];
-static int s_i32SpeakingDurationCount[MAX_TRACKED_FACES];  /* Frames in speaking state - min before release */
+static int s_i32SpeakingDurationCount[MAX_TRACKED_FACES];
+static bool s_abSpeaking[MAX_TRACKED_FACES];  /* Per-track speaking state (trackId-indexed) */
 
 static float s_afSmoothedRelX[LIP_LANDMARK_NUM];  /* Relative coords 0-1 within face bbox */
 static float s_afSmoothedRelY[LIP_LANDMARK_NUM];
@@ -310,6 +319,7 @@ static float ComputeMAR(
         if (smoothedRelX[i] < minX) minX = smoothedRelX[i];  if (smoothedRelX[i] > maxX) maxX = smoothedRelX[i];
         if (smoothedRelY[i] < minY) minY = smoothedRelY[i];  if (smoothedRelY[i] > maxY) maxY = smoothedRelY[i];
     }
+#if MAR_EXTRA_INDICES_NUM > 0
     for (int i = 0; i < MAR_EXTRA_INDICES_NUM; i++) {
         int idx = s_i32MarExtraIndices[i];
         if (idx < (int)results_KP.size() && faceW > 0 && faceH > 0) {
@@ -319,19 +329,31 @@ static float ComputeMAR(
             if (relY < minY) minY = relY;  if (relY > maxY) maxY = relY;
         }
     }
+#endif
     float horiz = maxX - minX;
     float vert = maxY - minY;
     if (horiz < 0.02f) return 0.0f;  /* 2% of face min */
     return vert / horiz;
 }
 
-/* MAR velocity: |MAR - prevMAR|. Lip-relative - head movement doesn't change mouth shape. */
-static float ComputeMARVelocity(float mar, int prevFaceIdx)
+/* Smooth MAR and compute velocity over 2-cycle window. Head movement = transient spike; speaking = sustained. */
+static float ComputeMARVelocityAndSmooth(float rawMAR, int prevFaceIdx, float *outSmoothedMAR)
 {
-    if (prevFaceIdx < 0 || prevFaceIdx >= MAX_TRACKED_FACES || !s_asPrevLipState[prevFaceIdx].valid)
-        return 0.0f;
-    float prev = s_asPrevLipState[prevFaceIdx].prevMAR;
-    return (mar > prev) ? (mar - prev) : (prev - mar);
+    float smoothed = rawMAR;
+    float velocity = 0.0f;
+    if (prevFaceIdx >= 0 && prevFaceIdx < MAX_TRACKED_FACES && s_asPrevLipState[prevFaceIdx].valid) {
+        float prev = s_asPrevLipState[prevFaceIdx].prevMAR;
+        smoothed = MAR_SMOOTHING_ALPHA * rawMAR + (1.0f - MAR_SMOOTHING_ALPHA) * prev;
+        /* Use prevPrevMAR when available - velocity over 2 cycles (~4 frames) reduces head-movement spikes */
+        if (s_asPrevLipState[prevFaceIdx].prevPrevMARValid) {
+            float old = s_asPrevLipState[prevFaceIdx].prevPrevMAR;
+            velocity = (smoothed > old) ? (smoothed - old) : (old - smoothed);
+        } else {
+            velocity = (smoothed > prev) ? (smoothed - prev) : (prev - smoothed);
+        }
+    }
+    *outSmoothedMAR = smoothed;
+    return velocity;
 }
 
 /* Find best-matching previous face by bbox center distance (for face order changes) */
@@ -357,9 +379,32 @@ static int FindMatchingPrevFace(int curX0, int curY0, int curW, int curH)
     return bestIdx;
 }
 
-/* Store smoothed lip positions (for EMA) and MAR (for MAR velocity) */
+/* Allocate new track when no match. Use first invalid slot. */
+static int AllocateTrack(int faceIdx)
+{
+    for (int j = 0; j < MAX_TRACKED_FACES; j++) {
+        if (!s_asPrevLipState[j].valid) return j;
+    }
+    return faceIdx % MAX_TRACKED_FACES;  /* Fallback: evict by face index */
+}
+
+/* Compute normalized bbox center movement. Returns sqrt(dx^2+dy^2) in units of bbox size. */
+static float HeadMoveAmount(int trackId, int curX0, int curY0, int curW, int curH)
+{
+    if (trackId < 0 || trackId >= MAX_TRACKED_FACES || !s_asPrevLipState[trackId].valid || curW <= 0 || curH <= 0)
+        return 0.0f;
+    int prevCx = s_asPrevLipState[trackId].x0 + s_asPrevLipState[trackId].w / 2;
+    int prevCy = s_asPrevLipState[trackId].y0 + s_asPrevLipState[trackId].h / 2;
+    int curCx = curX0 + curW / 2;
+    int curCy = curY0 + curH / 2;
+    float dx = (float)(curCx - prevCx) / (float)curW;
+    float dy = (float)(curCy - prevCy) / (float)curH;
+    return std::sqrt(dx*dx + dy*dy);
+}
+
+/* Store smoothed lip positions, MAR, and bbox. Apply bbox EMA. */
 static void StoreLipState(
-    const float *smoothedRelX, const float *smoothedRelY, float mar,
+    const float *smoothedRelX, const float *smoothedRelY, float smoothedMAR,
     int storeIdx, int faceX0, int faceY0, int faceW, int faceH
 )
 {
@@ -368,11 +413,26 @@ static void StoreLipState(
         s_asPrevLipState[storeIdx].lipX[i] = smoothedRelX[i];
         s_asPrevLipState[storeIdx].lipY[i] = smoothedRelY[i];
     }
-    s_asPrevLipState[storeIdx].prevMAR = mar;
+    s_asPrevLipState[storeIdx].prevPrevMAR = s_asPrevLipState[storeIdx].prevMAR;
+    s_asPrevLipState[storeIdx].prevPrevMARValid = s_asPrevLipState[storeIdx].valid;
+    s_asPrevLipState[storeIdx].prevMAR = smoothedMAR;
     s_asPrevLipState[storeIdx].x0 = faceX0;
     s_asPrevLipState[storeIdx].y0 = faceY0;
     s_asPrevLipState[storeIdx].w = faceW;
     s_asPrevLipState[storeIdx].h = faceH;
+    /* Bbox EMA - reduces crop jitter */
+    if (s_asPrevLipState[storeIdx].valid) {
+        float a = BBOX_SMOOTHING_ALPHA;
+        s_asPrevLipState[storeIdx].smoothX0 = (int)(a * faceX0 + (1.0f - a) * s_asPrevLipState[storeIdx].smoothX0);
+        s_asPrevLipState[storeIdx].smoothY0 = (int)(a * faceY0 + (1.0f - a) * s_asPrevLipState[storeIdx].smoothY0);
+        s_asPrevLipState[storeIdx].smoothW  = (int)(a * faceW  + (1.0f - a) * s_asPrevLipState[storeIdx].smoothW);
+        s_asPrevLipState[storeIdx].smoothH  = (int)(a * faceH  + (1.0f - a) * s_asPrevLipState[storeIdx].smoothH);
+    } else {
+        s_asPrevLipState[storeIdx].smoothX0 = faceX0;
+        s_asPrevLipState[storeIdx].smoothY0 = faceY0;
+        s_asPrevLipState[storeIdx].smoothW  = faceW;
+        s_asPrevLipState[storeIdx].smoothH  = faceH;
+    }
     s_asPrevLipState[storeIdx].valid = 1;
 }
 
@@ -581,13 +641,37 @@ static void DetectFaceLandmark_DrawResult(
 	{
 		faceBox = infFramebuf->results_FD[i];
 
+		/* Stable trackId: use for all state. Fixes flicker when face order changes. */
+		int matchedPrev = FindMatchingPrevFace(faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+		if (matchedPrev < 0 && infFramebuf->results_FD.size() == 1) {
+			matchedPrev = (s_asPrevLipState[0].valid) ? 0 : -1;
+		}
+		int trackId = (matchedPrev >= 0) ? matchedPrev : AllocateTrack(i);
+		if (matchedPrev < 0 && trackId < MAX_TRACKED_FACES) {
+			s_abSpeaking[trackId] = false;
+			s_i32SpeakingConfirmCount[trackId] = 0;
+			s_i32SpeakingReleaseCount[trackId] = 0;
+			s_i32SpeakingDurationCount[trackId] = 0;
+		}
+
+		/* Bbox EMA for crop - blend current + previous reduces jitter. */
+		if (trackId >= 0 && trackId < MAX_TRACKED_FACES && s_asPrevLipState[trackId].valid) {
+			float a = BBOX_SMOOTHING_ALPHA;
+			roi.x = (int)(a * faceBox.m_x0 + (1.0f - a) * s_asPrevLipState[trackId].smoothX0);
+			roi.y = (int)(a * faceBox.m_y0 + (1.0f - a) * s_asPrevLipState[trackId].smoothY0);
+			roi.w = (int)(a * faceBox.m_w + (1.0f - a) * s_asPrevLipState[trackId].smoothW);
+			roi.h = (int)(a * faceBox.m_h + (1.0f - a) * s_asPrevLipState[trackId].smoothH);
+			if (roi.w < 8) roi.w = faceBox.m_w;
+			if (roi.h < 8) roi.h = faceBox.m_h;
+		} else {
+			roi.x = faceBox.m_x0;
+			roi.y = faceBox.m_y0;
+			roi.w = faceBox.m_w;
+			roi.h = faceBox.m_h;
+		}
+
 		//resize face region image to input tensor
 		image_t resizeImg;
-
-		roi.x = faceBox.m_x0;
-		roi.y = faceBox.m_y0;
-		roi.w = faceBox.m_w;
-		roi.h = faceBox.m_h;
 
 		resizeImg.w = inputImgCols;
 		resizeImg.h = inputImgRows;
@@ -653,53 +737,59 @@ static void DetectFaceLandmark_DrawResult(
 			info("face landmark post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
 		}
 
-		/* Always: smoothing + drawing. Detection + store only every N frames (reduces jitter sensitivity). */
-		if (i < MAX_TRACKED_FACES && infFramebuf->results_KP.size() >= 468) {
-			int matchedPrev = FindMatchingPrevFace(faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
-			if (matchedPrev < 0 && infFramebuf->results_FD.size() == 1) {
-				matchedPrev = (s_asPrevLipState[0].valid) ? 0 : -1;
-			}
-			ApplyLipSmoothing(infFramebuf->results_KP, matchedPrev, roi.w, roi.h, s_afSmoothedRelX, s_afSmoothedRelY);
+		/* Always: smoothing + drawing. Detection + store only every N frames. */
+		if (trackId < MAX_TRACKED_FACES && infFramebuf->results_KP.size() >= 468) {
+			ApplyLipSmoothing(infFramebuf->results_KP, trackId, roi.w, roi.h, s_afSmoothedRelX, s_afSmoothedRelY);
 
 			if (runDetectionThisFrame) {
-				/* Lip-relative: MAR velocity = mouth shape change. Head movement = MAR stable. */
-				float mar = ComputeMAR(infFramebuf->results_KP, s_afSmoothedRelX, s_afSmoothedRelY, roi.w, roi.h);
-				float marVelocity = ComputeMARVelocity(mar, matchedPrev) / (float)SPEAKING_DETECT_EVERY_N_FRAMES;
-				int storeIdx = (matchedPrev >= 0) ? matchedPrev : i;
+				/* Lip-relative: smoothed MAR + MAR velocity. */
+				float rawMAR = ComputeMAR(infFramebuf->results_KP, s_afSmoothedRelX, s_afSmoothedRelY, roi.w, roi.h);
+				float smoothedMAR;
+				float marVelocity = ComputeMARVelocityAndSmooth(rawMAR, trackId, &smoothedMAR) / (float)SPEAKING_DETECT_EVERY_N_FRAMES;
 
-				int signalAboveOn  = (marVelocity > SPEAKING_MAR_VELOCITY_THRESHOLD_ON) && (mar > SPEAKING_MAR_THRESHOLD_ON);
-				int signalBelowOff = (marVelocity < SPEAKING_MAR_VELOCITY_THRESHOLD_OFF) || (mar < SPEAKING_MAR_THRESHOLD_OFF);
+				/* Head-motion rejection: if bbox moved too much, ignore mouth motion for this update */
+				float headMove = HeadMoveAmount(trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+				int headMoving = (headMove > HEAD_MOVE_THRESHOLD);
 
+				int signalAboveOn  = !headMoving && (marVelocity > SPEAKING_MAR_VELOCITY_THRESHOLD_ON) && (smoothedMAR > SPEAKING_MAR_THRESHOLD_ON);
+				int signalBelowOff = (marVelocity < SPEAKING_MAR_VELOCITY_THRESHOLD_OFF) || (smoothedMAR < SPEAKING_MAR_THRESHOLD_OFF);
+
+				/* All state indexed by trackId - fixes flicker when face order changes */
 				if (signalAboveOn) {
-					s_i32SpeakingConfirmCount[i] = (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[i] + 1 : SPEAKING_SMOOTHING_FRAMES;
-					s_i32SpeakingReleaseCount[i] = 0;
-					if (s_i32SpeakingConfirmCount[i] >= SPEAKING_SMOOTHING_FRAMES) {
-						infFramebuf->isSpeaking[i] = true;
+					s_i32SpeakingConfirmCount[trackId] = (s_i32SpeakingConfirmCount[trackId] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[trackId] + 1 : SPEAKING_SMOOTHING_FRAMES;
+					s_i32SpeakingReleaseCount[trackId] = 0;
+					if (s_i32SpeakingConfirmCount[trackId] >= SPEAKING_SMOOTHING_FRAMES) {
+						s_abSpeaking[trackId] = true;
 					}
-				} else if (infFramebuf->isSpeaking[i]) {
-					s_i32SpeakingDurationCount[i]++;
+				} else if (s_abSpeaking[trackId]) {
+					s_i32SpeakingDurationCount[trackId]++;
 					if (signalBelowOff) {
-						s_i32SpeakingReleaseCount[i]++;
-						if (s_i32SpeakingReleaseCount[i] >= SPEAKING_RELEASE_FRAMES &&
-							s_i32SpeakingDurationCount[i] >= SPEAKING_MIN_DURATION_FRAMES) {
-							infFramebuf->isSpeaking[i] = false;
+						s_i32SpeakingReleaseCount[trackId]++;
+						if (s_i32SpeakingReleaseCount[trackId] >= SPEAKING_RELEASE_FRAMES &&
+							s_i32SpeakingDurationCount[trackId] >= SPEAKING_MIN_DURATION_FRAMES) {
+							s_abSpeaking[trackId] = false;
 						}
 					} else {
-						s_i32SpeakingReleaseCount[i] = 0;
+						s_i32SpeakingReleaseCount[trackId] = 0;
 					}
-					s_i32SpeakingConfirmCount[i] = 0;
+					s_i32SpeakingConfirmCount[trackId] = 0;
 				} else {
-					s_i32SpeakingReleaseCount[i] = 0;
-					s_i32SpeakingConfirmCount[i] = 0;
-					s_i32SpeakingDurationCount[i] = 0;
+					s_i32SpeakingReleaseCount[trackId] = 0;
+					s_i32SpeakingConfirmCount[trackId] = 0;
+					s_i32SpeakingDurationCount[trackId] = 0;
 				}
-				if (!infFramebuf->isSpeaking[i]) {
-					s_i32SpeakingDurationCount[i] = 0;
+				if (!s_abSpeaking[trackId]) {
+					s_i32SpeakingDurationCount[trackId] = 0;
 				}
-				StoreLipState(s_afSmoothedRelX, s_afSmoothedRelY, mar, storeIdx, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+				/* Map trackId -> face index for display */
+				infFramebuf->isSpeaking[i] = s_abSpeaking[trackId];
+				StoreLipState(s_afSmoothedRelX, s_afSmoothedRelY, smoothedMAR, trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+			} else {
+				/* Not a detection frame - still need to map trackId to face for display */
+				infFramebuf->isSpeaking[i] = s_abSpeaking[trackId];
 			}
-		} else if (i < MAX_TRACKED_FACES) {
-			s_asPrevLipState[i].valid = 0;
+		} else if (trackId < MAX_TRACKED_FACES) {
+			s_asPrevLipState[trackId].valid = 0;
 		}
 
 		//Draw lip landmarks (relative coords converted to absolute)
