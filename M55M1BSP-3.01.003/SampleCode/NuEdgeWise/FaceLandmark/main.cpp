@@ -50,16 +50,17 @@
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
 /* Speaking detection: lip keypoint velocity threshold (pixels per frame) */
-#define SPEAKING_VELOCITY_THRESHOLD				(1.0f)   /* Lowered: lip movement is subtle */
-#define SPEAKING_SMOOTHING_FRAMES				(2)       /* Frames above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES					(5)       /* Frames below threshold before releasing (hysteresis) */
+#define SPEAKING_VELOCITY_THRESHOLD				(2.5f)   /* Higher = less sensitive */
+#define SPEAKING_SMOOTHING_FRAMES				(3)       /* Frames above threshold to trigger */
+#define SPEAKING_RELEASE_FRAMES					(4)       /* Frames below threshold before releasing */
+#define MAR_SPEAKING_THRESHOLD  (0.22f)  /* Mouth Aspect Ratio - higher = less sensitive. Require BOTH velocity AND MAR. */
 
-/* MediaPipe Face Mesh lip landmark indices (468-point mesh) */
-#define LIP_LANDMARK_NUM		(6)
+/* MediaPipe Face Mesh lip landmark indices - full mouth contour for better coverage */
+#define LIP_LANDMARK_NUM		(21)
 static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
-	61, 291, 78, 308, 87, 14   /* mouth corners, upper/lower lip (MediaPipe lip contour) */
+	61, 291, 78, 308, 87, 14,   /* corners, upper/lower center */
+	146, 91, 181, 84, 314, 405, 321, 375, 324, 318, 402, 317, 178, 88, 95  /* outer/inner lip contour */
 };
-#define MAR_SPEAKING_THRESHOLD  (0.12f)  /* Mouth Aspect Ratio above this = mouth open. Tune if needed. */
 
 typedef enum
 {
@@ -239,33 +240,7 @@ static void omv_init()
 #endif
 }
 
-static void DrawFaceLandmark(
-    const std::vector<arm::app::face_landmark::KeypointResult> &results,
-	int posOffsetX,
-	int posOffsetY,		
-    image_t *drawImg
-)
-{
-	int i;
-	arm::app::face_landmark::KeypointResult keyPoint;
-	int keypointSize = results.size();
-	
-	for(i = 0; i < keypointSize; i ++)
-	{
-		keyPoint = results[i];
-		//draw points
-		if(i < 468)
-		{
-			imlib_draw_circle(drawImg, posOffsetX + keyPoint.m_x, posOffsetY + keyPoint.m_y, 1, COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0), 1, true);	
-		}
-		else
-		{	
-			imlib_draw_circle(drawImg, posOffsetX + keyPoint.m_x, posOffsetY + keyPoint.m_y, 1, COLOR_R5_G6_B5_TO_RGB565(0, 0, COLOR_B5_MAX), 1, true);	
-		}
-	}
-}
-
-/* Draw lip keypoints prominently (green circles) */
+/* Draw only lip/mouth keypoints - no eyes, cheeks. Points form mouth outline. */
 static void DrawLipLandmark(
     const std::vector<arm::app::face_landmark::KeypointResult> &results,
 	int posOffsetX,
@@ -274,11 +249,12 @@ static void DrawLipLandmark(
 )
 {
 	if (results.size() < 468) return;
+	int lipColor = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);  /* Green */
 	for (int i = 0; i < LIP_LANDMARK_NUM; i++) {
 		int idx = s_i32LipLandmarkIndices[i];
 		if (idx < (int)results.size()) {
 			const auto &kp = results[idx];
-			imlib_draw_circle(drawImg, posOffsetX + kp.m_x, posOffsetY + kp.m_y, 3, COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0), 2, true);
+			imlib_draw_circle(drawImg, posOffsetX + kp.m_x, posOffsetY + kp.m_y, 2, lipColor, 1, true);
 		}
 	}
 }
@@ -652,8 +628,8 @@ static void DetectFaceLandmark_DrawResult(
 			float mar = ComputeMAR(infFramebuf->results_KP);
 			int storeIdx = (matchedPrev >= 0) ? matchedPrev : i;
 
-			/* Trigger: velocity (lip movement) OR mouth open (MAR) */
-			int speakingSignal = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) || (mar > MAR_SPEAKING_THRESHOLD);
+			/* Trigger: BOTH lip movement AND mouth open (less false positives) */
+			int speakingSignal = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) && (mar > MAR_SPEAKING_THRESHOLD);
 
 			if (speakingSignal) {
 				s_i32SpeakingConfirmCount[i] = (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[i] + 1 : SPEAKING_SMOOTHING_FRAMES;
@@ -687,7 +663,6 @@ static void DetectFaceLandmark_DrawResult(
 				u64StartCycle = pmu_get_systick_Count();
 			}
 
-			DrawFaceLandmark(infFramebuf->results_KP, roi.x, roi.y, &infFramebuf->frameImage);
 			DrawLipLandmark(infFramebuf->results_KP, roi.x, roi.y, &infFramebuf->frameImage);
 
 			if(profiler){
