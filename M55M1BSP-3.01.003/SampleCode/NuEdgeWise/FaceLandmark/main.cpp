@@ -49,17 +49,18 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection - higher thresholds to ignore constant micro-movement */
-#define SPEAKING_VELOCITY_THRESHOLD_ON		(3.0f)   /* Lip movement to trigger (higher = ignore jitter) */
-#define SPEAKING_VELOCITY_THRESHOLD_OFF		(1.8f)   /* Lip movement below this to release (dead zone) */
-#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger (higher = less sensitive) */
-#define SPEAKING_MAR_THRESHOLD_OFF			(0.14f)  /* Mouth closed to release (dead zone) */
-#define SPEAKING_SMOOTHING_FRAMES			(3)      /* Frames above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES				(4)      /* Consecutive frames below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(10)     /* Once speaking, stay for min frames */
+/* Speaking detection */
+#define SPEAKING_VELOCITY_THRESHOLD_ON		(2.5f)   /* Per-frame equivalent (we use 2-frame velocity/2) */
+#define SPEAKING_VELOCITY_THRESHOLD_OFF		(1.5f)   /* Dead zone */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger */
+#define SPEAKING_MAR_THRESHOLD_OFF			(0.14f)  /* Mouth closed to release */
+#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Detection runs every 2 frames, so 2 = 4 frames total */
+#define SPEAKING_RELEASE_FRAMES				(3)      /* Consecutive below to release */
+#define SPEAKING_MIN_DURATION_FRAMES		(8)      /* Min frames speaking before can release */
+#define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames - reduces jitter sensitivity */
 
-/* Landmark smoothing - stronger EMA to reduce constant micro-movement */
-#define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing. 0.25-0.3 reduces jitter */
+/* Landmark smoothing */
+#define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing */
 
 /* Lip offset: landmarks too high = shift down. Tune per camera/model. */
 #define LIP_OFFSET_X  (4)   /* Pixels to shift right */
@@ -103,8 +104,9 @@ static int s_i32SpeakingConfirmCount[MAX_TRACKED_FACES];
 static int s_i32SpeakingReleaseCount[MAX_TRACKED_FACES];
 static int s_i32SpeakingDurationCount[MAX_TRACKED_FACES];  /* Frames in speaking state - min before release */
 
-static float s_afSmoothedLipX[LIP_LANDMARK_NUM];  /* Temp buffer for EMA-smoothed positions */
+static float s_afSmoothedLipX[LIP_LANDMARK_NUM];
 static float s_afSmoothedLipY[LIP_LANDMARK_NUM];
+static uint32_t s_u32SpeakingDetectFrameCount = 0;  /* Skip frames: only run detection every N frames */
 
 S_FRAMEBUF s_asFramebuf[NUM_FRAMEBUF];
 
@@ -578,6 +580,10 @@ static void DetectFaceLandmark_DrawResult(
 
 	/* Resize speaking state to match face count */
 	infFramebuf->isSpeaking.resize(infFramebuf->results_FD.size(), false);
+
+	/* Frame skip: only run speaking detection every N frames - reduces jitter-induced false triggers */
+	s_u32SpeakingDetectFrameCount++;
+	const int runDetectionThisFrame = (s_u32SpeakingDetectFrameCount % SPEAKING_DETECT_EVERY_N_FRAMES) == 0;
 	
 	for(i = 0 ; i < infFramebuf->results_FD.size(); i ++)
 	{
@@ -655,52 +661,52 @@ static void DetectFaceLandmark_DrawResult(
 			info("face landmark post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
 		}
 
-		/* Speaking detection: EMA smoothing + dual-threshold hysteresis + min duration */
+		/* Always: smoothing + drawing. Detection + store only every N frames (reduces jitter sensitivity). */
 		if (i < MAX_TRACKED_FACES && infFramebuf->results_KP.size() >= 468) {
 			int matchedPrev = FindMatchingPrevFace(faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
 			if (matchedPrev < 0 && infFramebuf->results_FD.size() == 1) {
 				matchedPrev = (s_asPrevLipState[0].valid) ? 0 : -1;
 			}
-
-			/* Apply EMA smoothing - reduces jitter when face is static */
 			ApplyLipSmoothing(infFramebuf->results_KP, matchedPrev, roi.x, roi.y, s_afSmoothedLipX, s_afSmoothedLipY);
 
-			float lipVelocity = ComputeLipVelocity(s_afSmoothedLipX, s_afSmoothedLipY, matchedPrev);
-			float mar = ComputeMAR(infFramebuf->results_KP, s_afSmoothedLipX, s_afSmoothedLipY, roi.x, roi.y);
-			int storeIdx = (matchedPrev >= 0) ? matchedPrev : i;
+			if (runDetectionThisFrame) {
+				/* Velocity over N frames -> divide by N for per-frame equivalent */
+				float lipVelocity = ComputeLipVelocity(s_afSmoothedLipX, s_afSmoothedLipY, matchedPrev) / (float)SPEAKING_DETECT_EVERY_N_FRAMES;
+				float mar = ComputeMAR(infFramebuf->results_KP, s_afSmoothedLipX, s_afSmoothedLipY, roi.x, roi.y);
+				int storeIdx = (matchedPrev >= 0) ? matchedPrev : i;
 
-			/* Dual-threshold hysteresis: ON thresholds vs OFF thresholds (dead zone prevents flicker) */
-			int signalAboveOn  = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD_ON) && (mar > SPEAKING_MAR_THRESHOLD_ON);
-			int signalBelowOff = (lipVelocity < SPEAKING_VELOCITY_THRESHOLD_OFF) || (mar < SPEAKING_MAR_THRESHOLD_OFF);
+				int signalAboveOn  = (lipVelocity > SPEAKING_VELOCITY_THRESHOLD_ON) && (mar > SPEAKING_MAR_THRESHOLD_ON);
+				int signalBelowOff = (lipVelocity < SPEAKING_VELOCITY_THRESHOLD_OFF) || (mar < SPEAKING_MAR_THRESHOLD_OFF);
 
-			if (signalAboveOn) {
-				s_i32SpeakingConfirmCount[i] = (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[i] + 1 : SPEAKING_SMOOTHING_FRAMES;
-				s_i32SpeakingReleaseCount[i] = 0;
-				if (s_i32SpeakingConfirmCount[i] >= SPEAKING_SMOOTHING_FRAMES) {
-					infFramebuf->isSpeaking[i] = true;
-				}
-			} else if (infFramebuf->isSpeaking[i]) {
-				s_i32SpeakingDurationCount[i]++;
-				if (signalBelowOff) {
-					s_i32SpeakingReleaseCount[i]++;
-					/* Only release after: (a) below threshold for N frames, AND (b) min speaking duration elapsed */
-					if (s_i32SpeakingReleaseCount[i] >= SPEAKING_RELEASE_FRAMES &&
-						s_i32SpeakingDurationCount[i] >= SPEAKING_MIN_DURATION_FRAMES) {
-						infFramebuf->isSpeaking[i] = false;
+				if (signalAboveOn) {
+					s_i32SpeakingConfirmCount[i] = (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES) ? s_i32SpeakingConfirmCount[i] + 1 : SPEAKING_SMOOTHING_FRAMES;
+					s_i32SpeakingReleaseCount[i] = 0;
+					if (s_i32SpeakingConfirmCount[i] >= SPEAKING_SMOOTHING_FRAMES) {
+						infFramebuf->isSpeaking[i] = true;
 					}
+				} else if (infFramebuf->isSpeaking[i]) {
+					s_i32SpeakingDurationCount[i]++;
+					if (signalBelowOff) {
+						s_i32SpeakingReleaseCount[i]++;
+						if (s_i32SpeakingReleaseCount[i] >= SPEAKING_RELEASE_FRAMES &&
+							s_i32SpeakingDurationCount[i] >= SPEAKING_MIN_DURATION_FRAMES) {
+							infFramebuf->isSpeaking[i] = false;
+						}
+					} else {
+						s_i32SpeakingReleaseCount[i] = 0;
+					}
+					s_i32SpeakingConfirmCount[i] = 0;
 				} else {
 					s_i32SpeakingReleaseCount[i] = 0;
+					s_i32SpeakingConfirmCount[i] = 0;
+					s_i32SpeakingDurationCount[i] = 0;
 				}
-				s_i32SpeakingConfirmCount[i] = 0;
-			} else {
-				s_i32SpeakingReleaseCount[i] = 0;
-				s_i32SpeakingConfirmCount[i] = 0;
-				s_i32SpeakingDurationCount[i] = 0;
+				if (!infFramebuf->isSpeaking[i]) {
+					s_i32SpeakingDurationCount[i] = 0;
+				}
+				StoreLipPositions(s_afSmoothedLipX, s_afSmoothedLipY, storeIdx, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
 			}
-			if (!infFramebuf->isSpeaking[i]) {
-				s_i32SpeakingDurationCount[i] = 0;
-			}
-			StoreLipPositions(s_afSmoothedLipX, s_afSmoothedLipY, storeIdx, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+			/* When skip: isSpeaking unchanged from last detection run */
 		} else if (i < MAX_TRACKED_FACES) {
 			s_asPrevLipState[i].valid = 0;
 		}
