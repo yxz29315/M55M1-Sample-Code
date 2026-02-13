@@ -6,12 +6,13 @@ A demonstration sample for face landmark with optional **speaking detection**.
 1. Build by Keil
 2. Run
 ## Speaking Detection (optional)
-Uses lip keypoint velocity and Mouth Aspect Ratio (MAR) to detect who is speaking:
-- **Lip landmarks**: 6 key points (indices 61, 291, 78, 308, 87, 14)
-- **Detection**: Speaking when lip velocity > threshold OR mouth open (MAR > threshold)
+Uses **lip-relative** MAR (Mouth Aspect Ratio) and MAR velocity to detect who is speaking:
+- **Lip landmarks**: 24 lip contour points + chin for jaw-opening cue
+- **Detection**: Speaking when MAR velocity > threshold (mouth changing) AND MAR > threshold (mouth open)
+- **Lip-relative**: MAR and MAR velocity are pure mouth geometry—head movement does not trigger false positives
 - **Visual feedback**: Bounding box turns **green** when speaking; "Speaking" label appears
 - **Hysteresis**: Speaking state persists for a few frames after movement stops (reduces flicker)
-- **Tuning in main.cpp**: `SPEAKING_VELOCITY_THRESHOLD` (1.0), `MAR_SPEAKING_THRESHOLD` (0.12), `SPEAKING_RELEASE_FRAMES` (5)
+- **Tuning in main.cpp**: `SPEAKING_MAR_VELOCITY_THRESHOLD_ON/OFF`, `SPEAKING_MAR_THRESHOLD_ON/OFF`, `SPEAKING_RELEASE_FRAMES`
 ## Performance
 System clock: 220MHz
 | Model |Input Dimension | ROM (KB) | RAM (KB) | Inference Rate (inf/sec) |  
