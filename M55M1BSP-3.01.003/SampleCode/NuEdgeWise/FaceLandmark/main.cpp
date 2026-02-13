@@ -50,17 +50,17 @@
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
 /* Speaking detection - lip-relative: MAR + MAR velocity */
-#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.025f) /* Smoothed MAR change - mouth opening/closing */
-#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.010f) /* Dead zone - lower to release */
-#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger (raised for stability) */
-#define SPEAKING_MAR_THRESHOLD_OFF			(0.12f)  /* Mouth closed to release */
-#define SPEAKING_SMOOTHING_FRAMES			(4)      /* Consecutive updates above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES				(8)      /* Consecutive below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(12)     /* Min frames speaking before can release */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.018f) /* Smoothed MAR change - mouth opening/closing */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.008f) /* Dead zone - lower to release */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.16f)  /* Mouth open to trigger */
+#define SPEAKING_MAR_THRESHOLD_OFF			(0.11f)  /* Mouth closed to release */
+#define SPEAKING_SMOOTHING_FRAMES			(3)      /* Consecutive updates above threshold to trigger */
+#define SPEAKING_RELEASE_FRAMES				(5)      /* Consecutive below to release */
+#define SPEAKING_MIN_DURATION_FRAMES		(6)      /* Min frames speaking before can release */
 #define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames */
 #define MAR_SMOOTHING_ALPHA				(0.22f)  /* Heavy smoothing - reduces head-movement jitter */
-#define BBOX_SMOOTHING_ALPHA				(0.25f)  /* Face bbox EMA - reduces crop jitter */
-#define HEAD_MOVE_THRESHOLD				(0.06f)  /* If bbox center moved > 6% of size, ignore motion */
+#define BBOX_SMOOTHING_ALPHA				(0.25f)  /* Face bbox EMA - for storage only, NOT for crop */
+#define HEAD_MOVE_THRESHOLD				(0.12f)  /* Only reject when bbox center moved > 12% of size */
 
 /* Landmark smoothing */
 #define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing */
@@ -69,16 +69,14 @@
 #define LIP_OFFSET_X  (4)   /* Pixels to shift right */
 #define LIP_OFFSET_Y  (3)   /* Positive = shift down (corrects "too high") */
 
-/* Lip indices: lip contour only. Chin excluded - moves a lot with head rotation causing false triggers. */
+/* Lip indices: lip contour. Chin (152) in MAR for jaw-opening cue when speaking. */
 #define LIP_LANDMARK_NUM		(24)
-#define MAR_EXTRA_INDICES_NUM	(0)    /* Chin excluded - use lip-only MAR for head-movement stability */
+#define MAR_EXTRA_INDICES_NUM	(1)    /* Chin for jaw-opening - helps detect speaking */
 static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
 	61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 185, 40, 39, 37, 0, 267, 269, 270, 409,
 	78, 308, 87, 14
 };
-#if MAR_EXTRA_INDICES_NUM > 0
-static const int s_i32MarExtraIndices[MAR_EXTRA_INDICES_NUM] = { 152 };  /* Chin - jaw movement */
-#endif
+static const int s_i32MarExtraIndices[MAR_EXTRA_INDICES_NUM] = { 152 };  /* Chin - jaw drops when speaking */
 
 typedef enum
 {
@@ -654,21 +652,11 @@ static void DetectFaceLandmark_DrawResult(
 			s_i32SpeakingDurationCount[trackId] = 0;
 		}
 
-		/* Bbox EMA for crop - blend current + previous reduces jitter. */
-		if (trackId >= 0 && trackId < MAX_TRACKED_FACES && s_asPrevLipState[trackId].valid) {
-			float a = BBOX_SMOOTHING_ALPHA;
-			roi.x = (int)(a * faceBox.m_x0 + (1.0f - a) * s_asPrevLipState[trackId].smoothX0);
-			roi.y = (int)(a * faceBox.m_y0 + (1.0f - a) * s_asPrevLipState[trackId].smoothY0);
-			roi.w = (int)(a * faceBox.m_w + (1.0f - a) * s_asPrevLipState[trackId].smoothW);
-			roi.h = (int)(a * faceBox.m_h + (1.0f - a) * s_asPrevLipState[trackId].smoothH);
-			if (roi.w < 8) roi.w = faceBox.m_w;
-			if (roi.h < 8) roi.h = faceBox.m_h;
-		} else {
-			roi.x = faceBox.m_x0;
-			roi.y = faceBox.m_y0;
-			roi.w = faceBox.m_w;
-			roi.h = faceBox.m_h;
-		}
+		/* Use RAW face bbox for crop - smoothed bbox caused landmarks to not track mouth. */
+		roi.x = faceBox.m_x0;
+		roi.y = faceBox.m_y0;
+		roi.w = faceBox.m_w;
+		roi.h = faceBox.m_h;
 
 		//resize face region image to input tensor
 		image_t resizeImg;
