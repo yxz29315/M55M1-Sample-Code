@@ -18,6 +18,7 @@
 
 #include "imlib.h"          /* Image processing */
 #include "framebuffer.h"
+#include <cmath>
 #include "ModelFileReader.h"
 #include "ff.h"
 
@@ -48,6 +49,16 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
+/* Speaking detection: lip keypoint velocity threshold (pixels per frame) */
+#define SPEAKING_VELOCITY_THRESHOLD				(2.0f)
+#define SPEAKING_SMOOTHING_FRAMES				(3)  /* Frames to confirm speaking state */
+
+/* MediaPipe Face Mesh lip landmark indices (468-point mesh) */
+#define LIP_LANDMARK_NUM		(6)
+static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
+	61, 291, 78, 308, 87, 14   /* mouth corners, upper/lower lip (MediaPipe lip contour) */
+};
+
 typedef enum
 {
     eFRAMEBUF_EMPTY,
@@ -60,9 +71,20 @@ typedef struct
     E_FRAMEBUF_STATE eState;
     image_t frameImage;
     std::vector<arm::app::face_landmark::KeypointResult> results_KP;
-    std::vector<arm::app::face_detection::DetectionResult> results_FD;	
+    std::vector<arm::app::face_detection::DetectionResult> results_FD;
+    std::vector<bool> isSpeaking;   /* Per-face speaking state */
 } S_FRAMEBUF;
 
+/* Previous lip positions for velocity-based speaking detection */
+#define MAX_TRACKED_FACES  5
+typedef struct {
+    float lipX[LIP_LANDMARK_NUM];
+    float lipY[LIP_LANDMARK_NUM];
+    int x0, y0, w, h;
+    int valid;
+} S_PREV_LIP_STATE;
+static S_PREV_LIP_STATE s_asPrevLipState[MAX_TRACKED_FACES];
+static int s_i32SpeakingConfirmCount[MAX_TRACKED_FACES];
 
 S_FRAMEBUF s_asFramebuf[NUM_FRAMEBUF];
 
@@ -240,8 +262,75 @@ static void DrawFaceLandmark(
 	}
 }
 
+/* Draw lip keypoints prominently (green circles) */
+static void DrawLipLandmark(
+    const std::vector<arm::app::face_landmark::KeypointResult> &results,
+	int posOffsetX,
+	int posOffsetY,
+    image_t *drawImg
+)
+{
+	if (results.size() < 468) return;
+	for (int i = 0; i < LIP_LANDMARK_NUM; i++) {
+		int idx = s_i32LipLandmarkIndices[i];
+		if (idx < (int)results.size()) {
+			const auto &kp = results[idx];
+			imlib_draw_circle(drawImg, posOffsetX + kp.m_x, posOffsetY + kp.m_y, 3, COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0), 2, true);
+		}
+	}
+}
+
+/* Compute lip keypoint velocity (avg movement) and update speaking state */
+static float ComputeLipVelocity(
+    const std::vector<arm::app::face_landmark::KeypointResult> &results_KP,
+    int faceIdx,
+    int posOffsetX,
+    int posOffsetY
+)
+{
+    float velocity = 0.0f;
+    int validPoints = 0;
+
+    if (results_KP.size() < 468 || faceIdx >= MAX_TRACKED_FACES || !s_asPrevLipState[faceIdx].valid)
+        return 0.0f;
+
+    for (int i = 0; i < LIP_LANDMARK_NUM; i++) {
+        int idx = s_i32LipLandmarkIndices[i];
+        if (idx >= (int)results_KP.size()) continue;
+
+        float curX = posOffsetX + results_KP[idx].m_x;
+        float curY = posOffsetY + results_KP[idx].m_y;
+        float dx = curX - s_asPrevLipState[faceIdx].lipX[i];
+        float dy = curY - s_asPrevLipState[faceIdx].lipY[i];
+        velocity += (float)std::sqrt(dx*dx + dy*dy);
+        validPoints++;
+    }
+    return (validPoints > 0) ? (velocity / validPoints) : 0.0f;
+}
+
+/* Store current lip positions for next frame's velocity computation */
+static void StoreLipPositions(
+    const std::vector<arm::app::face_landmark::KeypointResult> &results_KP,
+    int faceIdx,
+    int posOffsetX,
+    int posOffsetY
+)
+{
+    if (faceIdx >= MAX_TRACKED_FACES || results_KP.size() < 468) return;
+
+    for (int i = 0; i < LIP_LANDMARK_NUM; i++) {
+        int idx = s_i32LipLandmarkIndices[i];
+        if (idx < (int)results_KP.size()) {
+            s_asPrevLipState[faceIdx].lipX[i] = posOffsetX + results_KP[idx].m_x;
+            s_asPrevLipState[faceIdx].lipY[i] = posOffsetY + results_KP[idx].m_y;
+        }
+    }
+    s_asPrevLipState[faceIdx].valid = 1;
+}
+
 static void DrawDetectFace(
     std::vector<arm::app::face_detection::DetectionResult> &results,
+    std::vector<bool> &isSpeaking,
     image_t *drawImg
 )
 {
@@ -251,7 +340,15 @@ static void DrawDetectFace(
 	for(int i = 0; i < faceBoxSize; i ++)
 	{
 		faceBox = results[i];
-		imlib_draw_rectangle(drawImg, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h, COLOR_B5_MAX, 2, false);
+		/* Green when speaking, blue otherwise */
+		int boxColor = (i < (int)isSpeaking.size() && isSpeaking[i])
+			? COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0)  /* Green */
+			: COLOR_B5_MAX;  /* Blue */
+		imlib_draw_rectangle(drawImg, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h, boxColor, 2, false);
+		/* Draw "Speaking" label when speaking */
+		if (i < (int)isSpeaking.size() && isSpeaking[i]) {
+			imlib_draw_string(drawImg, faceBox.m_x0, faceBox.m_y0 - 14, "Speaking", COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0), 1, 0, 0, false, 0, false, false, 0, false, false);
+		}
 	}
 }
 
@@ -424,6 +521,9 @@ static void DetectFaceLandmark_DrawResult(
 	#endif
 
 	TfLiteTensor *modelOutput3 = faceLandmarkModel->GetOutputTensor(FACE_LANDMARK_FACE_FLAG_TENSOR_INDEX);
+
+	/* Resize speaking state to match face count */
+	infFramebuf->isSpeaking.resize(infFramebuf->results_FD.size(), false);
 	
 	for(i = 0 ; i < infFramebuf->results_FD.size(); i ++)
 	{
@@ -501,6 +601,24 @@ static void DetectFaceLandmark_DrawResult(
 			info("face landmark post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
 		}
 
+		/* Speaking detection: lip keypoint velocity */
+		if (i < MAX_TRACKED_FACES && infFramebuf->results_KP.size() >= 468) {
+			float lipVelocity = ComputeLipVelocity(infFramebuf->results_KP, i, roi.x, roi.y);
+			if (lipVelocity > SPEAKING_VELOCITY_THRESHOLD) {
+				if (s_i32SpeakingConfirmCount[i] < SPEAKING_SMOOTHING_FRAMES)
+					s_i32SpeakingConfirmCount[i]++;
+				if (s_i32SpeakingConfirmCount[i] >= SPEAKING_SMOOTHING_FRAMES) {
+					infFramebuf->isSpeaking[i] = true;
+				}
+			} else {
+				s_i32SpeakingConfirmCount[i] = 0;
+				infFramebuf->isSpeaking[i] = false;
+			}
+			StoreLipPositions(infFramebuf->results_KP, i, roi.x, roi.y);
+		} else if (i < MAX_TRACKED_FACES) {
+			s_asPrevLipState[i].valid = 0;
+		}
+
 		//Draw face landmark keypoint
 		if(infFramebuf->results_KP.size())
 		{
@@ -509,6 +627,7 @@ static void DetectFaceLandmark_DrawResult(
 			}
 
 			DrawFaceLandmark(infFramebuf->results_KP, roi.x, roi.y, &infFramebuf->frameImage);
+			DrawLipLandmark(infFramebuf->results_KP, roi.x, roi.y, &infFramebuf->frameImage);
 
 			if(profiler){
 				u64EndCycle = pmu_get_systick_Count();
@@ -521,7 +640,7 @@ static void DetectFaceLandmark_DrawResult(
 		u64StartCycle = pmu_get_systick_Count();
 	}
 
-	DrawDetectFace(infFramebuf->results_FD, &infFramebuf->frameImage);
+	DrawDetectFace(infFramebuf->results_FD, infFramebuf->isSpeaking, &infFramebuf->frameImage);
 
 	if(profiler){
 		u64EndCycle = pmu_get_systick_Count();
