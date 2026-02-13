@@ -6,11 +6,12 @@ A demonstration sample for face landmark with optional **speaking detection**.
 1. Build by Keil
 2. Run
 ## Speaking Detection (optional)
-When enabled, the sample uses lip keypoint velocity to detect who is speaking:
-- **Lip landmarks**: 6 key points around the mouth (MediaPipe Face Mesh indices 61, 291, 78, 308, 13, 14)
-- **Detection**: When lip movement velocity exceeds threshold → "Speaking" state
-- **Visual feedback**: Bounding box turns **green** when speaking; "Speaking" label appears above the face
-- **Tuning**: Adjust `SPEAKING_VELOCITY_THRESHOLD` (default 2.0) and `SPEAKING_SMOOTHING_FRAMES` (default 3) in main.cpp
+Uses lip keypoint velocity and Mouth Aspect Ratio (MAR) to detect who is speaking:
+- **Lip landmarks**: 6 key points (indices 61, 291, 78, 308, 87, 14)
+- **Detection**: Speaking when lip velocity > threshold OR mouth open (MAR > threshold)
+- **Visual feedback**: Bounding box turns **green** when speaking; "Speaking" label appears
+- **Hysteresis**: Speaking state persists for a few frames after movement stops (reduces flicker)
+- **Tuning in main.cpp**: `SPEAKING_VELOCITY_THRESHOLD` (1.0), `MAR_SPEAKING_THRESHOLD` (0.12), `SPEAKING_RELEASE_FRAMES` (5)
 ## Performance
 System clock: 220MHz
 | Model |Input Dimension | ROM (KB) | RAM (KB) | Inference Rate (inf/sec) |  
