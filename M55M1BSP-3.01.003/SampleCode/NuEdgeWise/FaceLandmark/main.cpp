@@ -29,9 +29,6 @@
 //#define __PROFILE__
 #define __USE_DISPLAY__
 //#define __USE_UVC__
-#define NORMALIZE_INPUT_TO_0_1  1   /* 1=normalize pixel/255 before quant; 0=use raw [0,255] */
-#define SPEAKING_DEBUG_OVERLAY  0   /* 1=draw mouth_open, motion_energy, thresholds on screen */
-
 #if defined (FACE_LANDMARK_ATTENTION_MODEL)
 #define __LOAD_MODEL_FROM_SD__
 #endif
@@ -52,20 +49,18 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection - 4-point mouth_open_norm + motion energy + adaptive thresholds */
-#define SPEAKING_SMOOTHING_FRAMES			(3)      /* Consecutive updates above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES				(5)      /* Consecutive below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(6)      /* Min frames speaking before can release */
+/* Speaking detection - MAR + MAR velocity (simple, reliable) */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.015f) /* MAR change when mouth opens/closes */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.006f) /* Release when below */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.14f)  /* Mouth open to trigger */
+#define SPEAKING_MAR_THRESHOLD_OFF			(0.10f)  /* Mouth closed to release */
+#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Consecutive above threshold to trigger */
+#define SPEAKING_RELEASE_FRAMES				(4)      /* Consecutive below to release */
+#define SPEAKING_MIN_DURATION_FRAMES		(4)      /* Min frames speaking before can release */
 #define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames */
-#define MAR_SMOOTHING_ALPHA				(0.22f)  /* Heavy smoothing - reduces head-movement jitter */
-#define BBOX_SMOOTHING_ALPHA				(0.25f)  /* Face bbox EMA - for storage only, NOT for crop */
-#define HEAD_MOVE_THRESHOLD				(0.12f)  /* Only reject when bbox center moved > 12% of size */
-#define BBOX_PADDING_PERCENT				(15)     /* Add 15% padding around face crop - keeps lips in frame */
-#define OPEN_MIN_THRESHOLD				(0.12f)  /* Min mouth_open_norm to trigger */
-#define CLOSE_MIN_THRESHOLD				(0.08f)  /* Below this = mouth closed, can release */
-#define ADAPTIVE_K_ON					(5.0f)   /* Motion thresh = noise_mean + K_on * noise_mad */
-#define ADAPTIVE_K_OFF					(2.5f)   /* Release thresh */
-#define NOISE_EMA_ALPHA					(0.1f)   /* Update noise floor slowly */
+#define MAR_SMOOTHING_ALPHA				(0.3f)   /* MAR smoothing */
+#define BBOX_SMOOTHING_ALPHA				(0.25f)  /* For storage only */
+#define HEAD_MOVE_THRESHOLD				(0.15f)  /* Reject ON if head moved > 15% */
 
 /* Landmark smoothing */
 #define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing */
@@ -74,14 +69,9 @@
 #define LIP_OFFSET_X  (4)   /* Pixels to shift right */
 #define LIP_OFFSET_Y  (3)   /* Positive = shift down (corrects "too high") */
 
-/* Lip indices: lip contour for drawing. 4-point mouth: 13,14 (upper/lower lip), 61,291 (corners). */
+/* Lip indices: lip contour + chin for MAR. */
 #define LIP_LANDMARK_NUM		(24)
-#define MOUTH_UPPER_LIP		13
-#define MOUTH_LOWER_LIP		14
-#define MOUTH_LEFT_CORNER	61
-#define MOUTH_RIGHT_CORNER	291
-#define MOUTH_CHIN			152
-#define MOTION_ENERGY_WINDOW	12     /* Ring buffer size for motion energy (~0.5s at 10fps) */
+#define MAR_CHIN_INDEX		152
 static const int s_i32LipLandmarkIndices[LIP_LANDMARK_NUM] = {
 	61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 185, 40, 39, 37, 0, 267, 269, 270, 409,
 	78, 308, 87, 14
@@ -108,14 +98,9 @@ typedef struct
 typedef struct {
     float lipX[LIP_LANDMARK_NUM];
     float lipY[LIP_LANDMARK_NUM];
-    float prevMouthOpenNorm;       /* For velocity */
-    float prevPrevMouthOpenNorm;
+    float prevMAR;
+    float prevPrevMAR;
     int prevPrevValid;
-    float motionBuf[MOTION_ENERGY_WINDOW];  /* Ring buffer */
-    int motionBufIdx;
-    int motionBufCnt;
-    float noiseMean;               /* Adaptive baseline when NOT speaking */
-    float noiseMad;                /* Mean abs dev for thresholds */
     int x0, y0, w, h;
     int smoothX0, smoothY0, smoothW, smoothH;
     int valid;
@@ -226,23 +211,6 @@ static S_FRAMEBUF *get_inf_framebuf()
 
 #define IMAGE_FB_SIZE	(GLCD_WIDTH * GLCD_HEIGHT * 2)
 
-/* Quantize uint8 pixel to int8 using tensor scale/zero_point. Fixes landmark tracking if model expects specific input range. */
-static inline int8_t QuantizePixel(uint8_t pixel, float scale, int zeroPoint, int normalize01)
-{
-	float f;
-	if (normalize01) {
-		f = (float)pixel / 255.0f;
-	} else {
-		f = (float)pixel;
-	}
-	if (scale < 1e-6f) scale = 1.0f / 255.0f;  /* Fallback if scale missing */
-	float q = f / scale + (float)zeroPoint;
-	int qi = (int)(q >= 0 ? q + 0.5f : q - 0.5f);
-	if (qi < -128) qi = -128;
-	if (qi > 127) qi = 127;
-	return (int8_t)qi;
-}
-
 #undef OMV_FB_SIZE
 #define OMV_FB_SIZE (IMAGE_FB_SIZE + 1024)
 
@@ -335,72 +303,47 @@ static void ApplyLipSmoothing(
     }
 }
 
-/* 4-point mouth openness: upper lip 13, lower 14, corners 61,291. Scale-invariant. */
-static float ComputeMouthOpenNorm(
+/* MAR: vertical/horizontal extent of lip bbox + chin. Lip-relative. */
+static float ComputeMAR(
     const std::vector<arm::app::face_landmark::KeypointResult> &results_KP,
+    const float *smoothedRelX, const float *smoothedRelY,
     int faceW, int faceH
 )
 {
-    if (results_KP.size() < 468 || faceW <= 0 || faceH <= 0) return 0.0f;
-    float uX = (float)results_KP[MOUTH_UPPER_LIP].m_x / (float)faceW;
-    float uY = (float)results_KP[MOUTH_UPPER_LIP].m_y / (float)faceH;
-    float lX = (float)results_KP[MOUTH_LOWER_LIP].m_x / (float)faceW;
-    float lY = (float)results_KP[MOUTH_LOWER_LIP].m_y / (float)faceH;
-    float cLX = (float)results_KP[MOUTH_LEFT_CORNER].m_x / (float)faceW;
-    float cLY = (float)results_KP[MOUTH_LEFT_CORNER].m_y / (float)faceH;
-    float cRX = (float)results_KP[MOUTH_RIGHT_CORNER].m_x / (float)faceW;
-    float cRY = (float)results_KP[MOUTH_RIGHT_CORNER].m_y / (float)faceH;
-    float mouthOpen = std::sqrt((lX-uX)*(lX-uX) + (lY-uY)*(lY-uY));
-    float mouthWidth = std::sqrt((cRX-cLX)*(cRX-cLX) + (cRY-cLY)*(cRY-cLY));
-    if (mouthWidth < 0.01f) return 0.0f;
-    return mouthOpen / mouthWidth;
+    if (results_KP.size() < 468) return 0.0f;
+    float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+    for (int i = 0; i < LIP_LANDMARK_NUM; i++) {
+        if (smoothedRelX[i] < minX) minX = smoothedRelX[i];  if (smoothedRelX[i] > maxX) maxX = smoothedRelX[i];
+        if (smoothedRelY[i] < minY) minY = smoothedRelY[i];  if (smoothedRelY[i] > maxY) maxY = smoothedRelY[i];
+    }
+    if (MAR_CHIN_INDEX < (int)results_KP.size() && faceW > 0 && faceH > 0) {
+        float cx = (float)results_KP[MAR_CHIN_INDEX].m_x / (float)faceW;
+        float cy = (float)results_KP[MAR_CHIN_INDEX].m_y / (float)faceH;
+        if (cx < minX) minX = cx;  if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy;  if (cy > maxY) maxY = cy;
+    }
+    float horiz = maxX - minX;
+    float vert = maxY - minY;
+    if (horiz < 0.02f) return 0.0f;
+    return vert / horiz;
 }
 
-/* Velocity, motion energy, and adaptive thresholds. Returns motion_energy and smoothed mouth_open_norm. */
-static float ComputeMotionEnergyAndUpdate(
-    float mouthOpenNorm, int trackId,
-    float *outSmoothedOpen, float *outMotionEnergy, float *outNoiseMean, float *outNoiseMad
-)
+/* MAR velocity from smoothed MAR. */
+static float ComputeMARVelocityAndSmooth(float rawMAR, int trackId, float *outSmoothedMAR)
 {
-    float smoothed = mouthOpenNorm;
+    float smoothed = rawMAR;
     float velocity = 0.0f;
-    float motionEnergy = 0.0f;
-    *outNoiseMean = 0.01f;
-    *outNoiseMad = 0.005f;
-    if (trackId < 0 || trackId >= MAX_TRACKED_FACES) {
-        *outSmoothedOpen = smoothed;
-        *outMotionEnergy = 0.0f;
-        return velocity;
-    }
-    S_PREV_LIP_STATE *s = &s_asPrevLipState[trackId];
-    if (s->valid) {
-        smoothed = MAR_SMOOTHING_ALPHA * mouthOpenNorm + (1.0f - MAR_SMOOTHING_ALPHA) * s->prevMouthOpenNorm;
-        velocity = (smoothed > s->prevMouthOpenNorm) ? (smoothed - s->prevMouthOpenNorm) : (s->prevMouthOpenNorm - smoothed);
-        if (s->prevPrevValid)
-            velocity = (smoothed > s->prevPrevMouthOpenNorm) ? (smoothed - s->prevPrevMouthOpenNorm) : (s->prevPrevMouthOpenNorm - smoothed);
-    }
-    /* Push velocity to ring buffer */
-    if (trackId >= 0 && trackId < MAX_TRACKED_FACES) {
-        s->motionBuf[s->motionBufIdx] = velocity;
-        s->motionBufIdx = (s->motionBufIdx + 1) % MOTION_ENERGY_WINDOW;
-        if (s->motionBufCnt < MOTION_ENERGY_WINDOW) s->motionBufCnt++;
-        float sum = 0.0f;
-        for (int i = 0; i < s->motionBufCnt; i++) sum += s->motionBuf[i];
-        motionEnergy = sum / (float)s->motionBufCnt;
-        *outMotionEnergy = motionEnergy;
-        *outNoiseMean = s->noiseMean;
-        *outNoiseMad = s->noiseMad;
-        if (!s_abSpeaking[trackId] && s->motionBufCnt >= 4) {
-            s->noiseMean = NOISE_EMA_ALPHA * motionEnergy + (1.0f - NOISE_EMA_ALPHA) * s->noiseMean;
-            float mad = 0.0f;
-            for (int i = 0; i < s->motionBufCnt; i++)
-                mad += (s->motionBuf[i] > s->noiseMean) ? (s->motionBuf[i] - s->noiseMean) : (s->noiseMean - s->motionBuf[i]);
-            mad /= (float)s->motionBufCnt;
-            s->noiseMad = NOISE_EMA_ALPHA * mad + (1.0f - NOISE_EMA_ALPHA) * s->noiseMad;
-            if (s->noiseMad < 0.001f) s->noiseMad = 0.005f;
+    if (trackId >= 0 && trackId < MAX_TRACKED_FACES && s_asPrevLipState[trackId].valid) {
+        float prev = s_asPrevLipState[trackId].prevMAR;
+        smoothed = MAR_SMOOTHING_ALPHA * rawMAR + (1.0f - MAR_SMOOTHING_ALPHA) * prev;
+        if (s_asPrevLipState[trackId].prevPrevValid) {
+            float old = s_asPrevLipState[trackId].prevPrevMAR;
+            velocity = (smoothed > old) ? (smoothed - old) : (old - smoothed);
+        } else {
+            velocity = (smoothed > prev) ? (smoothed - prev) : (prev - smoothed);
         }
     }
-    *outSmoothedOpen = smoothed;
+    *outSmoothedMAR = smoothed;
     return velocity;
 }
 
@@ -450,9 +393,9 @@ static float HeadMoveAmount(int trackId, int curX0, int curY0, int curW, int cur
     return std::sqrt(dx*dx + dy*dy);
 }
 
-/* Store smoothed lip positions, mouth_open_norm, and bbox. */
+/* Store smoothed lip positions, MAR, and bbox. */
 static void StoreLipState(
-    const float *smoothedRelX, const float *smoothedRelY, float smoothedMouthOpen,
+    const float *smoothedRelX, const float *smoothedRelY, float smoothedMAR,
     int storeIdx, int faceX0, int faceY0, int faceW, int faceH
 )
 {
@@ -462,9 +405,9 @@ static void StoreLipState(
         s->lipX[i] = smoothedRelX[i];
         s->lipY[i] = smoothedRelY[i];
     }
-    s->prevPrevMouthOpenNorm = s->prevMouthOpenNorm;
+    s->prevPrevMAR = s->prevMAR;
     s->prevPrevValid = s->valid;
-    s->prevMouthOpenNorm = smoothedMouthOpen;
+    s->prevMAR = smoothedMAR;
     s->x0 = faceX0;
     s->y0 = faceY0;
     s->w = faceW;
@@ -557,10 +500,10 @@ static void DetectFaceRegion(
 		u64StartCycle = pmu_get_systick_Count();
 	}
 		
-    /* Quantize using tensor scale/zero_point. Wrong quant = poor landmarks. */
+    /* Original quant: pixel-128. Model was trained with this. */
 	for (size_t i = 0; i < inputTensor->bytes; i++)
 	{
-		signed_req_data[i] = QuantizePixel(req_data[i], inQuantParams.scale, inQuantParams.offset, NORMALIZE_INPUT_TO_0_1);
+		signed_req_data[i] = static_cast<int8_t>(req_data[i]) - 128;
 	}
 
 	if(profiler){
@@ -697,29 +640,13 @@ static void DetectFaceLandmark_DrawResult(
 			s_i32SpeakingConfirmCount[trackId] = 0;
 			s_i32SpeakingReleaseCount[trackId] = 0;
 			s_i32SpeakingDurationCount[trackId] = 0;
-			s_asPrevLipState[trackId].motionBufIdx = 0;
-			s_asPrevLipState[trackId].motionBufCnt = 0;
-			s_asPrevLipState[trackId].noiseMean = 0.01f;
-			s_asPrevLipState[trackId].noiseMad = 0.005f;
 		}
 
-		/* Raw bbox + padding - keeps lips in frame with small bbox jitter. */
-		{
-			int padX = (faceBox.m_w * BBOX_PADDING_PERCENT) / 100;
-			int padY = (faceBox.m_h * BBOX_PADDING_PERCENT) / 100;
-			int imgW = infFramebuf->frameImage.w;
-			int imgH = infFramebuf->frameImage.h;
-			roi.x = faceBox.m_x0 - padX;
-			roi.y = faceBox.m_y0 - padY;
-			roi.w = faceBox.m_w + 2 * padX;
-			roi.h = faceBox.m_h + 2 * padY;
-			if (roi.x < 0) { roi.w += roi.x; roi.x = 0; }
-			if (roi.y < 0) { roi.h += roi.y; roi.y = 0; }
-			if (roi.x + roi.w > imgW) roi.w = imgW - roi.x;
-			if (roi.y + roi.h > imgH) roi.h = imgH - roi.y;
-			if (roi.w < 8) roi.w = faceBox.m_w;
-			if (roi.h < 8) roi.h = faceBox.m_h;
-		}
+		/* Raw face bbox for crop - no padding. */
+		roi.x = faceBox.m_x0;
+		roi.y = faceBox.m_y0;
+		roi.w = faceBox.m_w;
+		roi.h = faceBox.m_h;
 
 		//resize face region image to input tensor
 		image_t resizeImg;
@@ -743,10 +670,10 @@ static void DetectFaceLandmark_DrawResult(
 			u64StartCycle = pmu_get_systick_Count();
 		}
 			
-		/* Quantize using tensor scale/zero_point. Wrong quant = poor landmarks. */
+		/* Original quant: pixel-128. Model was trained with this. */
 		for (size_t i = 0; i < inputTensor->bytes; i++)
 		{
-			signed_req_data[i] = QuantizePixel(req_data[i], inQuantParams.scale, inQuantParams.offset, NORMALIZE_INPUT_TO_0_1);
+			signed_req_data[i] = static_cast<int8_t>(req_data[i]) - 128;
 		}
 
 		if(profiler){
@@ -790,19 +717,16 @@ static void DetectFaceLandmark_DrawResult(
 			ApplyLipSmoothing(infFramebuf->results_KP, trackId, roi.w, roi.h, s_afSmoothedRelX, s_afSmoothedRelY);
 
 			if (runDetectionThisFrame) {
-				/* 4-point mouth_open_norm + motion energy + adaptive thresholds */
-				float rawMouthOpen = ComputeMouthOpenNorm(infFramebuf->results_KP, roi.w, roi.h);
-				float smoothedOpen, motionEnergy, noiseMean, noiseMad;
-				ComputeMotionEnergyAndUpdate(rawMouthOpen, trackId, &smoothedOpen, &motionEnergy, &noiseMean, &noiseMad);
-
-				float onThresh = noiseMean + ADAPTIVE_K_ON * noiseMad;
-				float offThresh = noiseMean + ADAPTIVE_K_OFF * noiseMad;
+				/* Simple MAR + MAR velocity */
+				float rawMAR = ComputeMAR(infFramebuf->results_KP, s_afSmoothedRelX, s_afSmoothedRelY, roi.w, roi.h);
+				float smoothedMAR;
+				float marVelocity = ComputeMARVelocityAndSmooth(rawMAR, trackId, &smoothedMAR) / (float)SPEAKING_DETECT_EVERY_N_FRAMES;
 
 				float headMove = HeadMoveAmount(trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
 				int headMoving = (headMove > HEAD_MOVE_THRESHOLD);
 
-				int signalAboveOn  = !headMoving && (motionEnergy > onThresh) && (smoothedOpen > OPEN_MIN_THRESHOLD);
-				int signalBelowOff = (motionEnergy < offThresh) || (smoothedOpen < CLOSE_MIN_THRESHOLD);
+				int signalAboveOn  = !headMoving && (marVelocity > SPEAKING_MAR_VELOCITY_THRESHOLD_ON) && (smoothedMAR > SPEAKING_MAR_THRESHOLD_ON);
+				int signalBelowOff = (marVelocity < SPEAKING_MAR_VELOCITY_THRESHOLD_OFF) || (smoothedMAR < SPEAKING_MAR_THRESHOLD_OFF);
 
 				/* All state indexed by trackId - fixes flicker when face order changes */
 				if (signalAboveOn) {
@@ -833,17 +757,7 @@ static void DetectFaceLandmark_DrawResult(
 				}
 				/* Map trackId -> face index for display */
 				infFramebuf->isSpeaking[i] = s_abSpeaking[trackId];
-				StoreLipState(s_afSmoothedRelX, s_afSmoothedRelY, smoothedOpen, trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
-#if SPEAKING_DEBUG_OVERLAY
-				{
-					char dbg[96];
-					int textY = faceBox.m_y0 + faceBox.m_h + 2;
-					snprintf(dbg, sizeof(dbg), "op%.2f me%.3f nm%.3f md%.3f", smoothedOpen, motionEnergy, noiseMean, noiseMad);
-					imlib_draw_string(&infFramebuf->frameImage, faceBox.m_x0, textY, dbg, C_WHITE, 1, 0, 0, false, 0, false, false, 0, false, false);
-					snprintf(dbg, sizeof(dbg), "on%.3f off%.3f hm%.2f spk%d cf%d", onThresh, offThresh, headMove, s_abSpeaking[trackId] ? 1 : 0, s_i32SpeakingConfirmCount[trackId]);
-					imlib_draw_string(&infFramebuf->frameImage, faceBox.m_x0, textY + 12, dbg, C_WHITE, 1, 0, 0, false, 0, false, false, 0, false, false);
-				}
-#endif
+				StoreLipState(s_afSmoothedRelX, s_afSmoothedRelY, smoothedMAR, trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
 			} else {
 				/* Not a detection frame - still need to map trackId to face for display */
 				infFramebuf->isSpeaking[i] = s_abSpeaking[trackId];
@@ -852,13 +766,13 @@ static void DetectFaceLandmark_DrawResult(
 			s_asPrevLipState[trackId].valid = 0;
 		}
 
-		//Draw lip landmarks (relative to roi crop - use roi for correct position)
+		//Draw lip landmarks (relative to face bbox)
 		if(infFramebuf->results_KP.size() >= 468)
 		{
 			if(profiler){
 				u64StartCycle = pmu_get_systick_Count();
 			}
-			DrawLipLandmark(s_afSmoothedRelX, s_afSmoothedRelY, roi.x, roi.y, roi.w, roi.h, &infFramebuf->frameImage);
+			DrawLipLandmark(s_afSmoothedRelX, s_afSmoothedRelY, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h, &infFramebuf->frameImage);
 
 			if(profiler){
 				u64EndCycle = pmu_get_systick_Count();
