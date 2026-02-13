@@ -49,17 +49,17 @@
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
-/* Speaking detection - dual-threshold hysteresis to prevent flickering */
-#define SPEAKING_VELOCITY_THRESHOLD_ON		(1.8f)   /* Lip movement to trigger speaking */
-#define SPEAKING_VELOCITY_THRESHOLD_OFF		(1.0f)   /* Lip movement below this to release (dead zone) */
-#define SPEAKING_MAR_THRESHOLD_ON			(0.15f)  /* Mouth open to trigger */
-#define SPEAKING_MAR_THRESHOLD_OFF			(0.10f)  /* Mouth closed to release (dead zone) */
-#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Frames above threshold to trigger (reduces delay) */
+/* Speaking detection - higher thresholds to ignore constant micro-movement */
+#define SPEAKING_VELOCITY_THRESHOLD_ON		(3.0f)   /* Lip movement to trigger (higher = ignore jitter) */
+#define SPEAKING_VELOCITY_THRESHOLD_OFF		(1.8f)   /* Lip movement below this to release (dead zone) */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger (higher = less sensitive) */
+#define SPEAKING_MAR_THRESHOLD_OFF			(0.14f)  /* Mouth closed to release (dead zone) */
+#define SPEAKING_SMOOTHING_FRAMES			(3)      /* Frames above threshold to trigger */
 #define SPEAKING_RELEASE_FRAMES				(4)      /* Consecutive frames below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(10)     /* Once speaking, stay for min frames (prevents flicker) */
+#define SPEAKING_MIN_DURATION_FRAMES		(10)     /* Once speaking, stay for min frames */
 
-/* Landmark smoothing - EMA reduces jitter when face is static */
-#define LANDMARK_SMOOTHING_ALPHA			(0.45f)  /* 0=full smooth, 1=no smooth. 0.4-0.5 typical */
+/* Landmark smoothing - stronger EMA to reduce constant micro-movement */
+#define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing. 0.25-0.3 reduces jitter */
 
 /* Lip offset: landmarks too high = shift down. Tune per camera/model. */
 #define LIP_OFFSET_X  (4)   /* Pixels to shift right */
