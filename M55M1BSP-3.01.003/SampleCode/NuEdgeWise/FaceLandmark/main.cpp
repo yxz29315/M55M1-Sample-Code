@@ -191,7 +191,7 @@ static S_FRAMEBUF *get_inf_framebuf()
     return NULL;
 }
 
-#define IMAGE_DISP_UPSCALE_FACTOR 1
+#define IMAGE_DISP_UPSCALE_FACTOR 2
 #if defined(LT7381_LCD_PANEL)
 #define FONT_DISP_UPSCALE_FACTOR 2
 #else
@@ -1092,11 +1092,20 @@ int main()
 
             //display result image
 #if defined (__USE_DISPLAY__)
-            //Display image on LCD
-            sDispRect.u32TopLeftX = 0;
-            sDispRect.u32TopLeftY = 0;
-			sDispRect.u32BottonRightX = ((frameBuffer.w * IMAGE_DISP_UPSCALE_FACTOR) - 1);
-			sDispRect.u32BottonRightY = ((frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR) - 1);
+            //Display image on LCD - scale to fill screen, centered
+            {
+                uint32_t lcdW = Disaplay_GetLCDWidth();
+                uint32_t lcdH = Disaplay_GetLCDHeight();
+                uint32_t dispW = frameBuffer.w * IMAGE_DISP_UPSCALE_FACTOR;
+                uint32_t dispH = frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR;
+                /* Center the scaled image on the LCD (clamp to fit) */
+                if (dispW > lcdW) dispW = lcdW;
+                if (dispH > lcdH) dispH = lcdH;
+                sDispRect.u32TopLeftX = (lcdW > dispW) ? ((lcdW - dispW) / 2) : 0;
+                sDispRect.u32TopLeftY = (lcdH > dispH) ? ((lcdH - dispH) / 2) : 0;
+                sDispRect.u32BottonRightX = sDispRect.u32TopLeftX + dispW - 1;
+                sDispRect.u32BottonRightY = sDispRect.u32TopLeftY + dispH - 1;
+            }
 
 
 #if defined(__PROFILE__)
@@ -1166,17 +1175,18 @@ int main()
                 //sprintf(szDisplayText,"Time %llu",(uint64_t) pmu_get_systick_Count() / (uint64_t)SystemCoreClock);
                 //info("Running %s sec \n", szDisplayText);
 
+                /* Overlay frame rate at top-left (full-screen mode) */
                 sDispRect.u32TopLeftX = 0;
-				sDispRect.u32TopLeftY = frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR;
-                sDispRect.u32BottonRightX = (frameBuffer.w - 1);
-				sDispRect.u32BottonRightY = ((frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR) + (FONT_DISP_UPSCALE_FACTOR * FONT_HTIGHT) - 1);
+                sDispRect.u32TopLeftY = 0;
+                sDispRect.u32BottonRightX = (FONT_WIDTH * 18 * FONT_DISP_UPSCALE_FACTOR) - 1;
+                sDispRect.u32BottonRightY = (FONT_DISP_UPSCALE_FACTOR * FONT_HTIGHT) - 1;
 
                 Display_ClearRect(C_WHITE, &sDispRect);
                 Display_PutText(
                     szDisplayText,
                     strlen(szDisplayText),
                     0,
-                    frameBuffer.h,
+                    0,
                     C_BLUE,
                     C_WHITE,
                     false,
