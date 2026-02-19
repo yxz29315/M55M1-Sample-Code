@@ -60,7 +60,8 @@
 #define SPEAKING_DETECT_EVERY_N_FRAMES		(1)      /* Run detection every frame (no skip) */
 #define MAR_SMOOTHING_ALPHA				(0.3f)   /* MAR smoothing */
 #define BBOX_SMOOTHING_ALPHA				(0.25f)  /* For storage only */
-#define HEAD_MOVE_THRESHOLD				(0.15f)  /* Reject ON if head moved > 15% */
+#define HEAD_MOVE_THRESHOLD				(0.08f)  /* Reject ON if head moved > 8% (was 15% - too lenient, caused false speaking) */
+#define HEAD_SIZE_CHANGE_THRESHOLD		(0.12f)  /* Reject ON if bbox size changed > 12% (catches zoom/tilt) */
 
 /* Landmark smoothing */
 #define LANDMARK_SMOOTHING_ALPHA			(0.28f)  /* Lower = more smoothing */
@@ -391,6 +392,20 @@ static float HeadMoveAmount(int trackId, int curX0, int curY0, int curW, int cur
     float dx = (float)(curCx - prevCx) / (float)curW;
     float dy = (float)(curCy - prevCy) / (float)curH;
     return std::sqrt(dx*dx + dy*dy);
+}
+
+/* True if bbox size changed significantly (head moved closer/further or detector resized). */
+static int HeadUnstable(int trackId, int curX0, int curY0, int curW, int curH)
+{
+    float posMove = HeadMoveAmount(trackId, curX0, curY0, curW, curH);
+    if (posMove > HEAD_MOVE_THRESHOLD) return 1;
+    if (trackId < 0 || trackId >= MAX_TRACKED_FACES || !s_asPrevLipState[trackId].valid || curW <= 0 || curH <= 0)
+        return 0;
+    int prevW = s_asPrevLipState[trackId].w;
+    int prevH = s_asPrevLipState[trackId].h;
+    float sizeChangeW = (prevW > 0) ? (float)std::abs(curW - prevW) / (float)prevW : 0.0f;
+    float sizeChangeH = (prevH > 0) ? (float)std::abs(curH - prevH) / (float)prevH : 0.0f;
+    return (sizeChangeW > HEAD_SIZE_CHANGE_THRESHOLD || sizeChangeH > HEAD_SIZE_CHANGE_THRESHOLD) ? 1 : 0;
 }
 
 /* Update smoothed bbox every frame - reduces keypoint jitter when face detector output wobbles. */
@@ -741,10 +756,9 @@ static void DetectFaceLandmark_DrawResult(
 				float smoothedMAR;
 				float marVelocity = ComputeMARVelocityAndSmooth(rawMAR, trackId, &smoothedMAR) / (float)SPEAKING_DETECT_EVERY_N_FRAMES;
 
-				float headMove = HeadMoveAmount(trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
-				int headMoving = (headMove > HEAD_MOVE_THRESHOLD);
+				int headUnstable = HeadUnstable(trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
 
-				int signalAboveOn  = !headMoving && (marVelocity > SPEAKING_MAR_VELOCITY_THRESHOLD_ON) && (smoothedMAR > SPEAKING_MAR_THRESHOLD_ON);
+				int signalAboveOn  = !headUnstable && (marVelocity > SPEAKING_MAR_VELOCITY_THRESHOLD_ON) && (smoothedMAR > SPEAKING_MAR_THRESHOLD_ON);
 				int signalBelowOff = (marVelocity < SPEAKING_MAR_VELOCITY_THRESHOLD_OFF) || (smoothedMAR < SPEAKING_MAR_THRESHOLD_OFF);
 
 				/* All state indexed by trackId - fixes flicker when face order changes */
