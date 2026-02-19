@@ -57,7 +57,7 @@
 #define SPEAKING_SMOOTHING_FRAMES			(2)      /* Consecutive above threshold to trigger */
 #define SPEAKING_RELEASE_FRAMES				(4)      /* Consecutive below to release */
 #define SPEAKING_MIN_DURATION_FRAMES		(4)      /* Min frames speaking before can release */
-#define SPEAKING_DETECT_EVERY_N_FRAMES		(2)      /* Run detection every N frames */
+#define SPEAKING_DETECT_EVERY_N_FRAMES		(1)      /* Run detection every frame (no skip) */
 #define MAR_SMOOTHING_ALPHA				(0.3f)   /* MAR smoothing */
 #define BBOX_SMOOTHING_ALPHA				(0.25f)  /* For storage only */
 #define HEAD_MOVE_THRESHOLD				(0.15f)  /* Reject ON if head moved > 15% */
