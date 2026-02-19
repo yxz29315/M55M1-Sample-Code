@@ -206,8 +206,8 @@ int ImageSensor_Init(void)
     MFP_ConfigCCAP(TRUE);
 
     /* Init sensor */
-    //s_psSensorInfo = &g_sSensorHM1055_VGA_YUV422;
-    s_psSensorInfo = &g_sSensorHM1055_QVGA_YUV422;
+    s_psSensorInfo = &g_sSensorHM1055_VGA_YUV422;
+    //s_psSensorInfo = &g_sSensorHM1055_QVGA_YUV422;
 
     /* Initialize sensor and set sensor output format as YUV422 */
     if (s_psSensorInfo->pfnInitSensor(0) == FALSE) return -1;
