@@ -50,13 +50,13 @@
 #define FACE_PRESENCE_THRESHOLD  				(0.4)
 
 /* Speaking detection - MAR + MAR velocity (simple, reliable) */
-#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.015f) /* MAR change when mouth opens/closes */
-#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.006f) /* Release when below */
-#define SPEAKING_MAR_THRESHOLD_ON			(0.20f)  /* Mouth open to trigger (raised from 0.14 - less sensitive to head shake) */
-#define SPEAKING_MAR_THRESHOLD_OFF			(0.14f)  /* Mouth closed to release */
-#define SPEAKING_SMOOTHING_FRAMES			(2)      /* Consecutive above threshold to trigger */
-#define SPEAKING_RELEASE_FRAMES				(4)      /* Consecutive below to release */
-#define SPEAKING_MIN_DURATION_FRAMES		(4)      /* Min frames speaking before can release */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_ON	(0.022f) /* MAR change when mouth opens/closes (raised - less sensitive) */
+#define SPEAKING_MAR_VELOCITY_THRESHOLD_OFF	(0.008f) /* Release when below */
+#define SPEAKING_MAR_THRESHOLD_ON			(0.26f)  /* Mouth open to trigger (raised - less sensitive to head shake) */
+#define SPEAKING_MAR_THRESHOLD_OFF			(0.18f)  /* Mouth closed to release */
+#define SPEAKING_SMOOTHING_FRAMES			(3)      /* Consecutive above threshold to trigger (reduces flicker) */
+#define SPEAKING_RELEASE_FRAMES				(5)      /* Consecutive below to release */
+#define SPEAKING_MIN_DURATION_FRAMES		(5)      /* Min frames speaking before can release */
 #define SPEAKING_DETECT_EVERY_N_FRAMES		(1)      /* Run detection every frame (no skip) */
 #define MAR_SMOOTHING_ALPHA				(0.3f)   /* MAR smoothing */
 #define BBOX_SMOOTHING_ALPHA				(0.25f)  /* For storage only */
