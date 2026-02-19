@@ -393,6 +393,25 @@ static float HeadMoveAmount(int trackId, int curX0, int curY0, int curW, int cur
     return std::sqrt(dx*dx + dy*dy);
 }
 
+/* Update smoothed bbox every frame - reduces keypoint jitter when face detector output wobbles. */
+static void UpdateSmoothedBbox(int trackId, int faceX0, int faceY0, int faceW, int faceH)
+{
+    if (trackId < 0 || trackId >= MAX_TRACKED_FACES) return;
+    S_PREV_LIP_STATE *s = &s_asPrevLipState[trackId];
+    float a = BBOX_SMOOTHING_ALPHA;
+    if (s->valid) {
+        s->smoothX0 = (int)(a * faceX0 + (1.0f - a) * s->smoothX0);
+        s->smoothY0 = (int)(a * faceY0 + (1.0f - a) * s->smoothY0);
+        s->smoothW  = (int)(a * faceW  + (1.0f - a) * s->smoothW);
+        s->smoothH  = (int)(a * faceH  + (1.0f - a) * s->smoothH);
+    } else {
+        s->smoothX0 = faceX0;
+        s->smoothY0 = faceY0;
+        s->smoothW  = faceW;
+        s->smoothH  = faceH;
+    }
+}
+
 /* Store smoothed lip positions, MAR, and bbox. */
 static void StoreLipState(
     const float *smoothedRelX, const float *smoothedRelY, float smoothedMAR,
@@ -769,10 +788,19 @@ static void DetectFaceLandmark_DrawResult(
 		//Draw lip landmarks (relative to face bbox)
 		if(infFramebuf->results_KP.size() >= 468)
 		{
+			/* Use smoothed bbox for drawing - reduces jitter when face detector output wobbles */
+			UpdateSmoothedBbox(trackId, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h);
+			int drawX0 = faceBox.m_x0, drawY0 = faceBox.m_y0, drawW = faceBox.m_w, drawH = faceBox.m_h;
+			if (trackId >= 0 && trackId < MAX_TRACKED_FACES && s_asPrevLipState[trackId].valid) {
+				drawX0 = s_asPrevLipState[trackId].smoothX0;
+				drawY0 = s_asPrevLipState[trackId].smoothY0;
+				drawW  = s_asPrevLipState[trackId].smoothW;
+				drawH  = s_asPrevLipState[trackId].smoothH;
+			}
 			if(profiler){
 				u64StartCycle = pmu_get_systick_Count();
 			}
-			DrawLipLandmark(s_afSmoothedRelX, s_afSmoothedRelY, faceBox.m_x0, faceBox.m_y0, faceBox.m_w, faceBox.m_h, &infFramebuf->frameImage);
+			DrawLipLandmark(s_afSmoothedRelX, s_afSmoothedRelY, drawX0, drawY0, drawW, drawH, &infFramebuf->frameImage);
 
 			if(profiler){
 				u64EndCycle = pmu_get_systick_Count();
