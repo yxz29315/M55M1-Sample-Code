@@ -294,24 +294,12 @@ int main()
         return 1;
 	}
 
-    /* Model object creation and initialisation. */
-    arm::app::MouthDetectionModel model;
-
-    if (!model.Init(arm::app::tensorArena,
-                    sizeof(arm::app::tensorArena),
-                    (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
-                    i32ModelSize))
-    {
-        printf_err("Failed to initialise model\n");
-        return 1;
-    }
-
-    /* Setup cache poicy of tensor arean buffer */
-    info("Set tesnor arena cache policy to WTRA \n");
+    /* Setup MPU for tensor arena BEFORE model.Init() - required for HyperRAM access */
+    info("Set tensor arena cache policy to WTRA\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
-            // SRAM for tensor arena
+            // Tensor arena (SRAM or HyperRAM)
             ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
                          ARM_MPU_SH_NON,    // Non-shareable
                          0,                 // Read-only
@@ -344,8 +332,20 @@ int main()
 #endif
     };
 
-    // Setup MPU configuration
+    // Setup MPU configuration (must be before model.Init() for HyperRAM tensor arena)
     InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
+
+    /* Model object creation and initialisation. */
+    arm::app::MouthDetectionModel model;
+
+    if (!model.Init(arm::app::tensorArena,
+                    sizeof(arm::app::tensorArena),
+                    (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
+                    i32ModelSize))
+    {
+        printf_err("Failed to initialise model\n");
+        return 1;
+    }
 
     TfLiteTensor *inputTensor   = model.GetInputTensor(0);
 
