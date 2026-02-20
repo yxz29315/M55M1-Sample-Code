@@ -67,11 +67,8 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena buffer - SRAM only (fits in 1MB region with SDH buffers) */
-#undef ACTIVATION_BUF_SZ
-#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0x000FFC00)  /* 1MB - 1KB for SDH */
-
-static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
+/* Tensor arena buffer - use project-defined ACTIVATION_BUF_SZ */
+static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 
 	
 } /* namespace app */
@@ -315,7 +312,7 @@ int main()
                          0,                 // Read-only
                          1,                 // Non-Privileged
                          1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + MOUTH_DETECTION_ACTIVATION_BUF_SZ - 1),        // Limit
+            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA) // Attribute index - Write-Through, Read-allocate
         },
         {
