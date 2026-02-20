@@ -69,11 +69,13 @@ namespace arm
 namespace app
 {
 /* Tensor arena buffer - 3 MB in HyperRAM. UNINIT section = no zeroing at startup.
- * First access is in model.Init() after BoardInit() initializes HyperRAM. */
+ * First access is in model.Init() after BoardInit() initializes HyperRAM.
+ * Hardcoded section to bypass any include/macro issues. */
 #undef ACTIVATION_BUF_SZ
 #define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0x300000)  /* 3 MB */
 
-static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ] ACTIVATION_BUF_HYPERRAM_ATTRIBUTE;
+__attribute__((aligned(16), section(".bss.NoInit.activation_buf_hyperam")))
+static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ];
 
 	
 } /* namespace app */
