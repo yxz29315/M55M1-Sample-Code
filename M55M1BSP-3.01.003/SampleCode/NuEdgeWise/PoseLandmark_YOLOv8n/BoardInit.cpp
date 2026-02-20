@@ -14,6 +14,27 @@
 #include "ethosu_npu_init.h"
 #include "hyperram_code.h"
 
+/* Use HIRC (internal RC) instead of HXT (external crystal) if board hangs with no UART output.
+ * Set to 1 if your board lacks external crystal or HXT never stabilizes. */
+#define USE_HIRC_CLOCK  1
+
+/* Override SetDebugUartCLK when using HIRC - skip HXT wait that can hang forever */
+#if (USE_HIRC_CLOCK == 1)
+extern "C" void SetDebugUartCLK(void)
+{
+#if (!defined(DEBUG_ENABLE_SEMIHOST) || (DEBUG_ENABLE_SEMIHOST == 1)) && !defined(OS_USE_SEMIHOSTING)
+    /* UART uses HIRC - no HXT needed. Skip HXT enable/wait to avoid hang. */
+#if(USING_UART0 == 1)
+    CLK_SetModuleClock(DEBUG_PORT_MODULE, CLK_UARTSEL0_UART0SEL_HIRC, CLK_UARTDIV0_UART0DIV(1));
+#else
+    CLK_SetModuleClock(DEBUG_PORT_MODULE, CLK_UARTSEL0_UART6SEL_HIRC, CLK_UARTDIV0_UART6DIV(1));
+#endif
+    CLK_EnableModuleClock(DEBUG_PORT_MODULE);
+    SYS_ResetModule(DEBUG_PORT_RST);
+#endif
+}
+#endif
+
 #define DESIGN_NAME "M55M1"
 #define HYPERRAM_SPIM_PORT SPIM0        //For NuMaker-M55M1 board
 
@@ -41,17 +62,17 @@ static void SYS_Init(void)
     /* Waiting for Internal RC clock ready */
     CLK_WaitClockReady(CLK_STATUS_HIRCSTB_Msk);
 
-    /* Enable HXT clock */
+#if (USE_HIRC_CLOCK == 1)
+    /* Use HIRC (internal RC) - no external crystal required. Board boots even without HXT. */
+    CLK_SetBusClock(CLK_SCLKSEL_SCLKSEL_APLL0, CLK_APLLCTL_APLLSRC_HIRC, FREQ_220MHZ);
+    CLK_EnableAPLL(CLK_APLLCTL_APLLSRC_HIRC, FREQ_220MHZ, CLK_APLL1_SELECT);
+#else
+    /* Enable HXT clock (external crystal) */
     CLK_EnableXtalRC(CLK_SRCCTL_HXTEN_Msk);
-
-    /* Waiting for HXT clock ready */
     CLK_WaitClockReady(CLK_STATUS_HXTSTB_Msk);
-
-    /* Switch SCLK clock source to APLL0 and Enable APLL0 220MHz clock */
     CLK_SetBusClock(CLK_SCLKSEL_SCLKSEL_APLL0, CLK_APLLCTL_APLLSRC_HXT, FREQ_220MHZ);
-
-    /* Enable APLL1 clock */
     CLK_EnableAPLL(CLK_APLLCTL_APLLSRC_HXT, FREQ_220MHZ, CLK_APLL1_SELECT);
+#endif
 
 
     /* Update System Core Clock */
