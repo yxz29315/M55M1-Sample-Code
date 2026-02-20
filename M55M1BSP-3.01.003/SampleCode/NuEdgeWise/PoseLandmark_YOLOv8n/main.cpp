@@ -10,8 +10,8 @@
 #include "BoardInit.hpp"      /* Board initialisation */
 #include "log_macros.h"      /* Logging macros (optional) */
 
+#include "ethosu_mem_config.h" /* ACTIVATION_BUF_HYPERRAM_ATTRIBUTE - must be before BufAttributes */
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
-#include "ethosu_mem_config.h" /* ACTIVATION_BUF_HYPERRAM_ATTRIBUTE */
 #include "MouthDetectionModel.hpp"
 #include "FaceDetectorPostProcessing.hpp"
 #include "FaceDetectionResult.hpp"
