@@ -68,13 +68,12 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena buffer - 3 MB in HyperRAM. UNINIT section = no zeroing at startup.
- * First access is in model.Init() after BoardInit() initializes HyperRAM.
- * Hardcoded section to bypass any include/macro issues. */
+/* Tensor arena - MUST be in SRAM. Ethos-U55 can only access Flash + internal SRAM
+ * for activation buffers (not HyperRAM/SPIM0). SRAM_NONCACHEABLE ~1KB, so ~1020KB free. */
 #undef ACTIVATION_BUF_SZ
-#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0x300000)  /* 3 MB */
+#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0xFFC00)  /* 1020 KB - max that fits in SRAM */
 
-__attribute__((aligned(16), section(".bss.NoInit.activation_buf_hyperam")))
+__attribute__((aligned(16), section(".bss.NoInit.activation_buf_sram")))
 static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ];
 
 	
@@ -296,20 +295,19 @@ int main()
         return 1;
 	}
 
-    /* Setup MPU for tensor arena BEFORE model.Init() - required for HyperRAM access.
-     * HyperRAM (external SPIM0) must be Non-cacheable for Ethos-U/DMA access. */
-    info("Set tensor arena cache policy to Non-cacheable (HyperRAM)\n");
+    /* Setup MPU for tensor arena BEFORE model.Init() */
+    info("Set tensor arena cache policy to WTRA (SRAM)\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
-            // Tensor arena in HyperRAM (0x82000000) - Non-cacheable for external memory
+            // Tensor arena in SRAM (Ethos-U can only use SRAM for activations)
             ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
                          ARM_MPU_SH_NON,    // Non-shareable
                          0,                 // Read-only
                          1,                 // Non-Privileged
                          1),                // eXecute Never enabled
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + MOUTH_DETECTION_ACTIVATION_BUF_SZ - 1),        // Limit
-                         eMPU_ATTR_NON_CACHEABLE) // Non-cacheable for HyperRAM/Ethos-U
+                         eMPU_ATTR_CACHEABLE_WTRA) // WTRA for SRAM
         },
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
