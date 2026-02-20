@@ -1,7 +1,7 @@
 /**************************************************************************//**
  * @file     main.cpp
  * @version  V1.00
- * @brief    Pose landmark network sample. Demonstrate pose landmark detect.
+ * @brief    Mouth detection sample (YOLO-Fastest v1.1). Detects mouth open/closed.
  *
  * @copyright SPDX-License-Identifier: Apache-2.0
  * @copyright Copyright (C) 2023 Nuvoton Technology Corp. All rights reserved.
@@ -11,8 +11,9 @@
 #include "log_macros.h"      /* Logging macros (optional) */
 
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
-#include "YOLOv8nPoseModel.hpp"       /* Model API */
-#include "YOLOv8nPosePostProcessing.hpp"
+#include "MouthDetectionModel.hpp"
+#include "FaceDetectorPostProcessing.hpp"
+#include "FaceDetectionResult.hpp"
 
 #include "imlib.h"          /* Image processing */
 #include "framebuffer.h"
@@ -42,30 +43,8 @@
 
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
-#define POSE_PRESENCE_THRESHOLD  				(0.7)
-#define POSE_KEYPOINT_VISIBLE_THRESHOLD  		(0.5)
-
-enum{
-	ePOSE_KP_INDEX_NOSE,				//0
-	ePOSE_KP_INDEX_LEFT_EYE,			//1
-	ePOSE_KP_INDEX_RIGHT_EYE,			//2
-	ePOSE_KP_INDEX_LEFT_EAR,			//3
-	ePOSE_KP_INDEX_RIGHT_EAR,			//4
-	ePOSE_KP_INDEX_LEFT_SHOULDER,		//5
-	ePOSE_KP_INDEX_RIGHT_SHOULDER,		//6
-	ePOSE_KP_INDEX_LEFT_ELBOW,			//7
-	ePOSE_KP_INDEX_RIGHT_ELBOW,			//8
-	ePOSE_KP_INDEX_LEFT_WRIST,			//9
-	ePOSE_KP_INDEX_RIGHT_WRIST,			//10
-	ePOSE_KP_INDEX_LEFT_HIP,			//11
-	ePOSE_KP_INDEX_RIGHT_HIP,			//12
-	ePOSE_KP_INDEX_LEFT_KNEE,			//13
-	ePOSE_KP_INDEX_RIGHT_KNEE,			//14
-	ePOSE_KP_INDEX_LEFT_ANKLE,			//15
-	ePOSE_KP_INDEX_RIGHT_ANKLE,			//16
-	ePOSE_KP_NUMS,						//17
-}E_POSE_KP_INDEX;
-
+#define MOUTH_DETECTION_THRESHOLD  				(0.5f)
+#define MOUTH_NMS_THRESHOLD  					(0.45f)
 
 typedef enum
 {
@@ -78,7 +57,7 @@ typedef struct
 {
     E_FRAMEBUF_STATE eState;
     image_t frameImage;
-    std::vector<arm::app::yolov8n_pose::PoseResult> results;
+    std::vector<arm::app::face_detection::DetectionResult> results;
 } S_FRAMEBUF;
 
 
@@ -91,12 +70,6 @@ namespace app
 /* Tensor arena buffer */
 static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 
-/* Optional getter function for the model pointer and its size. */
-namespace pose_landmark
-{
-extern uint8_t *GetModelPointer();
-extern size_t GetModelLen();
-} /* namespace hand_landmark */
 	
 } /* namespace app */
 } /* namespace arm */
@@ -216,153 +189,30 @@ static void omv_init()
 #endif
 }
 
-static void DrawPoseLandmark(
-    const std::vector<arm::app::yolov8n_pose::PoseResult> &results,
+static const char *MOUTH_LABELS[] = { "Closed", "Speaking" };
+
+static void DrawMouthDetections(
+    const std::vector<arm::app::face_detection::DetectionResult> &results,
     image_t *drawImg
 )
 {
-	arm::app::yolov8n_pose::PoseResult pose;
-	int lineColor = COLOR_R5_G6_B5_TO_RGB565(0,COLOR_G6_MAX, 0);	
-	int poseSize = results.size();
-	
-	for(int p = 0; p < poseSize; p ++)
+	int boxColor = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);
+	int labelY;
+
+	for (size_t i = 0; i < results.size(); i++)
 	{
-		pose = results[p];
-		imlib_draw_rectangle(drawImg, pose.m_poseBox.x, pose.m_poseBox.y, pose.m_poseBox.w, pose.m_poseBox.h, COLOR_B5_MAX, 2, false);
+		const auto &r = results[i];
+		imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, boxColor, 2, false);
 
-		struct S_KEY_POINT keyPoint;
-		struct S_KEY_POINT keyPointTemp;
-		std::vector<struct S_KEY_POINT> keyPoints;
-
-		keyPoints = pose.m_keyPoints;
-
-		for(int k = 0; k < keyPoints.size(); k ++)
-		{
-			keyPoint = keyPoints[k];
-			
-			if(keyPoint.visible < POSE_KEYPOINT_VISIBLE_THRESHOLD)
-				continue;
-
-			//draw points
-			imlib_draw_circle(drawImg, keyPoint.x, keyPoint.y, 1, COLOR_B5_MAX, 1, true);
-
-			//draw lines
-			if( k == ePOSE_KP_INDEX_NOSE || k == ePOSE_KP_INDEX_LEFT_SHOULDER)
-			{
-				//Don't draw line
-			}
-			else if(k == ePOSE_KP_INDEX_LEFT_EYE || k == ePOSE_KP_INDEX_RIGHT_EYE)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_NOSE];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_LEFT_EAR)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_EYE];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_RIGHT_EAR)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_RIGHT_EYE];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_RIGHT_SHOULDER)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_SHOULDER];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_LEFT_ELBOW)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_SHOULDER];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_RIGHT_ELBOW)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_RIGHT_SHOULDER];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_LEFT_WRIST)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_ELBOW];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_RIGHT_WRIST)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_RIGHT_ELBOW];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}
-			else if(k == ePOSE_KP_INDEX_LEFT_HIP)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_SHOULDER];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}			
-			else if(k == ePOSE_KP_INDEX_RIGHT_HIP)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_RIGHT_SHOULDER];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_HIP];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-
-			}
-			else if(k == ePOSE_KP_INDEX_LEFT_KNEE)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_HIP];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}						
-			else if(k == ePOSE_KP_INDEX_RIGHT_KNEE)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_RIGHT_HIP];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}			
-			else if(k == ePOSE_KP_INDEX_LEFT_ANKLE)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_LEFT_KNEE];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}						
-			else if(k == ePOSE_KP_INDEX_RIGHT_ANKLE)
-			{
-				keyPointTemp = keyPoints[ePOSE_KP_INDEX_RIGHT_KNEE];
-				
-				if(keyPointTemp.visible >=  POSE_KEYPOINT_VISIBLE_THRESHOLD)
-					imlib_draw_line(drawImg, keyPoint.x, keyPoint.y, keyPointTemp.x, keyPointTemp.y, lineColor, 1);
-			}						
-		}
+		labelY = (r.m_y0 - 14 > 0) ? (r.m_y0 - 14) : r.m_y0;
+		imlib_draw_string(drawImg, r.m_x0, labelY, MOUTH_LABELS[r.m_classId], COLOR_B5_MAX, 2, 0, 0, false,
+		                  false, false, false, 0, false, false);
 	}
-	
 }
 
 static int32_t PrepareModelToHyperRAM(void)
 {
-#define MODEL_FILE "0:\\YOLOv8n-pose.tflite"
+#define MODEL_FILE "0:\\yolo-fastest-1.1-int8_vela.tflite"
 #define EACH_READ_SIZE 512
 	
     TCHAR sd_path[] = { '0', ':', 0 };    /* SD drive started from 0 */	
@@ -439,7 +289,7 @@ int main()
 	}
 
     /* Model object creation and initialisation. */
-    arm::app::YOLOv8nPoseModel model;
+    arm::app::MouthDetectionModel model;
 
     if (!model.Init(arm::app::tensorArena,
                     sizeof(arm::app::tensorArena),
@@ -506,16 +356,31 @@ int main()
 
     TfLiteIntArray *inputShape = model.GetInputShape(0);
 
-    const int inputImgCols = inputShape->data[arm::app::YOLOv8nPoseModel::ms_inputColsIdx];
-    const int inputImgRows = inputShape->data[arm::app::YOLOv8nPoseModel::ms_inputRowsIdx];
-    const uint32_t nChannels = inputShape->data[arm::app::YOLOv8nPoseModel::ms_inputChannelsIdx];
+    const int inputImgCols = inputShape->data[arm::app::MouthDetectionModel::ms_inputColsIdx];
+    const int inputImgRows = inputShape->data[arm::app::MouthDetectionModel::ms_inputRowsIdx];
+    const uint32_t nChannels = inputShape->data[arm::app::MouthDetectionModel::ms_inputChannelsIdx];
 
-    /* Hand landmark model preprocessing is image conversion from uint8 to [0,1] float values,
-     * then quantize them with input quantization info. */
     arm::app::QuantParams inQuantParams = arm::app::GetTensorQuantParams(inputTensor);
 
-    // postProcess
-    arm::app::yolov8n_pose::YOLOv8nPosePostProcessing postProcess(&model, POSE_PRESENCE_THRESHOLD);
+    /* Mouth detection post-processing (YOLO-Fastest style) */
+    static std::vector<arm::app::face_detection::DetectionResult> s_postProcessResults;
+    arm::app::face_detection::PostProcessParams postParams = {
+        .inputImgRows = inputImgRows,
+        .inputImgCols = inputImgCols,
+        .originalImageRows = 0,  /* set per frame */
+        .originalImageCols = 0,
+        .anchor1 = mouth_anchor1,
+        .anchor2 = mouth_anchor2,
+        .threshold = MOUTH_DETECTION_THRESHOLD,
+        .nms = MOUTH_NMS_THRESHOLD,
+        .numClasses = 2,
+        .topN = 0
+    };
+    arm::app::FaceDetectorPostProcess postProcess(
+        model.GetOutputTensor(0),
+        model.GetOutputTensor(1),
+        s_postProcessResults,
+        postParams);
 	
     //display framebuffer
     image_t frameBuffer;
@@ -641,34 +506,30 @@ int main()
 
         if (infFramebuf)
         {
-			//post process
+			/* Post process - set original image size for this frame */
+			postParams.originalImageRows = infFramebuf->frameImage.h;
+			postParams.originalImageCols = infFramebuf->frameImage.w;
 
 #if defined(__PROFILE__)
 			u64StartCycle = pmu_get_systick_Count();
 #endif
-			postProcess.RunPostProcessing(
-				inputImgCols,
-				inputImgRows,
-				infFramebuf->frameImage.w,
-				infFramebuf->frameImage.h,
-				infFramebuf->results);
+			postProcess.RunPostProcess(infFramebuf->results);
 
 #if defined(__PROFILE__)
 			u64EndCycle = pmu_get_systick_Count();
 			info("post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
 #endif
 
-            //draw bbox and render
-            /* Draw boxes. */
-			if(infFramebuf->results.size())
+            /* Draw mouth detection boxes and labels */
+			if (infFramebuf->results.size())
 			{
 #if defined(__PROFILE__)
 				u64StartCycle = pmu_get_systick_Count();
 #endif
-				DrawPoseLandmark(infFramebuf->results, &infFramebuf->frameImage);
+				DrawMouthDetections(infFramebuf->results, &infFramebuf->frameImage);
 #if defined(__PROFILE__)
 				u64EndCycle = pmu_get_systick_Count();
-				info("draw hand landmark cycles %llu \n", (u64EndCycle - u64StartCycle));
+				info("draw mouth detections cycles %llu \n", (u64EndCycle - u64StartCycle));
 #endif
 			}
 

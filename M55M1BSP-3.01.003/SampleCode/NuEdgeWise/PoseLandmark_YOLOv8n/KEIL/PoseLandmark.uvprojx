@@ -500,9 +500,9 @@
               <FilePath>..\ModelFileReader.c</FilePath>
             </File>
             <File>
-              <FileName>YOLOv8nPosePostProcessing.cpp</FileName>
+              <FileName>FaceDetectorPostProcessing.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\YOLOv8nPosePostProcessing.cpp</FilePath>
+              <FilePath>..\FaceDetectorPostProcessing.cpp</FilePath>
             </File>
           </Files>
         </Group>
@@ -535,9 +535,9 @@
           <GroupName>Model</GroupName>
           <Files>
             <File>
-              <FileName>YOLOv8nPoseModel.cpp</FileName>
+              <FileName>MouthDetectionModel.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\Model\YOLOv8nPoseModel.cpp</FilePath>
+              <FilePath>..\Model\MouthDetectionModel.cpp</FilePath>
             </File>
           </Files>
         </Group>
@@ -563,6 +563,11 @@
               <FileName>Profiler.cc</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\..\..\ThirdParty\ml-embedded-evaluation-kit\source\profiler\Profiler.cc</FilePath>
+            </File>
+            <File>
+              <FileName>ImageUtils.cc</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\ThirdParty\ml-embedded-evaluation-kit\source\application\api\common\source\ImageUtils.cc</FilePath>
             </File>
           </Files>
         </Group>
