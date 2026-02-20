@@ -162,8 +162,7 @@ APP_IMAGE FLASH_START FLASH_SIZE
 	SRAM01_HYPERRAM AlignExpr(+0, 32) UNINIT
     {
         .ANY (.bss.sram.data)
-        .ANY (.bss.NoInit.activation_buf_sram)
-        .ANY (.bss.NoInit.activation_buf_hyperam)
+        .ANY1 (.bss.NoInit.activation_buf_sram)
     }
     ; Check size overflow here and ImageLength is uncompressed size
     ScatterAssert((ImageLength(SRAM_NONCACHEABLE) + ImageLength(SRAM01_HYPERRAM)) < (SRAM01_ALIASE_SIZE + SPIM0_SIZE))

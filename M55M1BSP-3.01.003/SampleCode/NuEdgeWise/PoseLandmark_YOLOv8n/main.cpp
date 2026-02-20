@@ -11,7 +11,6 @@
 #include "log_macros.h"      /* Logging macros (optional) */
 
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
-#include "ethosu_mem_config.h" /* ACTIVATION_BUF_HYPERRAM_ATTRIBUTE */
 #include "MouthDetectionModel.hpp"
 #include "FaceDetectorPostProcessing.hpp"
 #include "FaceDetectionResult.hpp"
@@ -68,11 +67,11 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena buffer - 3 MB in HyperRAM (Ethos-U can access; deployment guide recommendation) */
+/* Tensor arena buffer - SRAM only (fits in 1MB region with SDH buffers) */
 #undef ACTIVATION_BUF_SZ
-#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0x300000)  /* 3 MB */
+#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0x000FFC00)  /* 1MB - 1KB for SDH */
 
-static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ] ACTIVATION_BUF_HYPERRAM_ATTRIBUTE;
+static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 
 	
 } /* namespace app */
