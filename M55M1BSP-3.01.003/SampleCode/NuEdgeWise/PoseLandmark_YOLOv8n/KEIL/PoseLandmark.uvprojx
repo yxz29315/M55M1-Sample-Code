@@ -485,6 +485,11 @@
               <FilePath>..\BoardInit.cpp</FilePath>
             </File>
             <File>
+              <FileName>Reset_Handler_PreInit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Reset_Handler_PreInit.c</FilePath>
+            </File>
+            <File>
               <FileName>main.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\main.cpp</FilePath>
