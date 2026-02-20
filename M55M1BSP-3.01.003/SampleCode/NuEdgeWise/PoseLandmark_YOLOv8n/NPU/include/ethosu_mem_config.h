@@ -29,4 +29,7 @@
 #define ACTIVATION_BUF_SECTION      section(".bss.NoInit.activation_buf_sram")
 #define ACTIVATION_BUF_SECTION_NAME ("SRAM")
 
+#define ACTIVATION_BUF_SECTION_HYPERRAM      section(".bss.NoInit.activation_buf_hyperam")
+#define ACTIVATION_BUF_HYPERRAM_ATTRIBUTE    __attribute__((aligned(ETHOS_U_MEM_BYTE_ALIGNMENT), ACTIVATION_BUF_SECTION_HYPERRAM))
+
 #endif /* ETHOS_U_NPU_MEM_CONFIG_H */
