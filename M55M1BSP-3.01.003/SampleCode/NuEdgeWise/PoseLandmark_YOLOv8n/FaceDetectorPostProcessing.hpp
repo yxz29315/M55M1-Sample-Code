@@ -16,6 +16,7 @@
  */
 #ifndef FACE_DETECTOR_POST_PROCESSING_HPP
 #define FACE_DETECTOR_POST_PROCESSING_HPP
+#include "TensorFlowLiteMicro.hpp"
 #include "ImageUtils.hpp"
 #include "FaceDetectionResult.hpp"
 #include "BaseProcessing.hpp"
