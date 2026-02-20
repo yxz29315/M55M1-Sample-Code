@@ -163,10 +163,15 @@ APP_IMAGE FLASH_START FLASH_SIZE
     {
         .ANY (.bss.sram.data)
         .ANY (.bss.NoInit.activation_buf_sram)
+    }
+    ; Tensor arena in HyperRAM (SPIM0) - 3 MB at 0x82000000
+    ; Must be separate so Ethos-U and CPU can access it
+    ACTIVATION_BUF_HYPERRAM SPIM0_START 0x00300000 UNINIT
+    {
         .ANY (.bss.NoInit.activation_buf_hyperam)
     }
-    ; Check size overflow here and ImageLength is uncompressed size
-    ScatterAssert((ImageLength(SRAM_NONCACHEABLE) + ImageLength(SRAM01_HYPERRAM)) < (SRAM01_ALIASE_SIZE + SPIM0_SIZE))
+    ; Check size overflow
+    ScatterAssert((ImageLength(SRAM_NONCACHEABLE) + ImageLength(SRAM01_HYPERRAM)) < SRAM01_ALIASE_SIZE)
 
     ARM_LIB_STACK __STACK_TOP EMPTY - STACK_SIZE {}     ; Reserve empty region for stack
 
