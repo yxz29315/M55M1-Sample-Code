@@ -113,13 +113,16 @@ int BoardInit(void)
     /* UART init - will enable valid use of printf (stdout
      * re-directed at this UART (UART6) */
     InitDebugUart();
+    printf("BoardInit: UART ready\n");
 
     SYS_LockReg();                   /* Unlock register lock protect */
 
+    printf("BoardInit: HyperRAM init...\n");
     HyperRAM_Init(HYPERRAM_SPIM_PORT);
     /* Enter direct-mapped mode to run new applications */
     SPIM_HYPER_EnterDirectMapMode(HYPERRAM_SPIM_PORT);
 	/* SDH open SD card*/
+    printf("BoardInit: SD card init...\n");
     SDH_Open_Disk(SDH0, CardDetect_From_GPIO);
 
     info("%s: complete\n", __FUNCTION__);

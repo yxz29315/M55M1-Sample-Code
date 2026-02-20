@@ -276,6 +276,7 @@ int main()
 {
     /* Initialise the UART module to allow printf related functions (if using retarget) */
     BoardInit();
+    info("main: BoardInit done, loading model...\n");
 
 	/* Copy model file from SD to HyperRAM*/
 	int32_t i32ModelSize;
