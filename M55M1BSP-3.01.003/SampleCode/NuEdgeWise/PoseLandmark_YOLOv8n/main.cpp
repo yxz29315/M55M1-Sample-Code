@@ -296,19 +296,20 @@ int main()
         return 1;
 	}
 
-    /* Setup MPU for tensor arena BEFORE model.Init() - required for HyperRAM access */
-    info("Set tensor arena cache policy to WTRA\n");
+    /* Setup MPU for tensor arena BEFORE model.Init() - required for HyperRAM access.
+     * HyperRAM (external SPIM0) must be Non-cacheable for Ethos-U/DMA access. */
+    info("Set tensor arena cache policy to Non-cacheable (HyperRAM)\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
-            // Tensor arena (SRAM or HyperRAM)
+            // Tensor arena in HyperRAM (0x82000000) - Non-cacheable for external memory
             ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
                          ARM_MPU_SH_NON,    // Non-shareable
                          0,                 // Read-only
                          1,                 // Non-Privileged
                          1),                // eXecute Never enabled
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + MOUTH_DETECTION_ACTIVATION_BUF_SZ - 1),        // Limit
-                         eMPU_ATTR_CACHEABLE_WTRA) // Attribute index - Write-Through, Read-allocate
+                         eMPU_ATTR_NON_CACHEABLE) // Non-cacheable for HyperRAM/Ethos-U
         },
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
