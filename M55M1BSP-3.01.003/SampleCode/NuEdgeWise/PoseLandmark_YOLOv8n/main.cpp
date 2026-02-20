@@ -11,6 +11,7 @@
 #include "log_macros.h"      /* Logging macros (optional) */
 
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
+#include "ethosu_mem_config.h" /* ACTIVATION_BUF_HYPERRAM_ATTRIBUTE */
 #include "MouthDetectionModel.hpp"
 #include "FaceDetectorPostProcessing.hpp"
 #include "FaceDetectionResult.hpp"
@@ -67,8 +68,12 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena buffer - use project-defined ACTIVATION_BUF_SZ */
-static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
+/* Tensor arena buffer - 3 MB in HyperRAM. UNINIT section = no zeroing at startup.
+ * First access is in model.Init() after BoardInit() initializes HyperRAM. */
+#undef ACTIVATION_BUF_SZ
+#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0x300000)  /* 3 MB */
+
+static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ] ACTIVATION_BUF_HYPERRAM_ATTRIBUTE;
 
 	
 } /* namespace app */
@@ -312,7 +317,7 @@ int main()
                          0,                 // Read-only
                          1,                 // Non-Privileged
                          1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
+            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + MOUTH_DETECTION_ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA) // Attribute index - Write-Through, Read-allocate
         },
         {
