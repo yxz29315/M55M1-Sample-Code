@@ -84,6 +84,7 @@
 
 #define SPIM0_START      0x82000000
 #define SPIM0_SIZE       0x02000000
+#define ACTIVATION_BUF_HYPERRAM_SIZE 0x00300000
 
 
 //#define STACK_HEAP       0x20180000
@@ -165,8 +166,8 @@ APP_IMAGE FLASH_START FLASH_SIZE
         .ANY (.bss.NoInit.activation_buf_sram)
     }
     ; Tensor arena in HyperRAM (SPIM0) - 3 MB at 0x82000000
-    ; Must be separate so Ethos-U and CPU can access it
-    ACTIVATION_BUF_HYPERRAM SPIM0_START 0x00300000 UNINIT
+    ; Format: name address UNINIT size { ... }
+    ACTIVATION_BUF_HYPERRAM SPIM0_START UNINIT ACTIVATION_BUF_HYPERRAM_SIZE
     {
         .ANY (.bss.NoInit.activation_buf_hyperam)
     }
