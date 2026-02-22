@@ -1,0 +1,16 @@
+# Keil build artifacts (Working_Project_Sample and similar)
+**/KEIL/Listings/
+**/KEIL/Objects/
+**/KEIL/release/
+*.axf
+*.htm
+*.lnp
+*.dep
+*.d
+*.o
+*.map
+*.lst
+*.i
+
+# Keil user-specific IDE files
+**/KEIL/*.uvguix.*
