@@ -296,7 +296,7 @@ static void main_task(void *pvParameters)
 
     /* Setup MPU for tensor arena BEFORE model.Init() - required for NPU to access arena (WTRA) */
     info("Set tensor arena cache policy to WTRA\n");
-    const std::vector<ARM_MPU_Region_t> mpuConfig =
+    std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
             // SRAM for tensor arena
@@ -308,6 +308,13 @@ static void main_task(void *pvParameters)
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA) // Attribute index - cacheable WTRA
         },
+#if defined(__LOAD_MODEL_FROM_SD__)
+        {
+            // Model in HyperRAM - Non-cacheable for NPU DMA access
+            ARM_MPU_RBAR(0x82400000, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(0x8247FFFF, eMPU_ATTR_NON_CACHEABLE)  // 512KB region for model
+        },
+#endif
 #if defined (__USE_CCAP__)
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
@@ -343,6 +350,21 @@ static void main_task(void *pvParameters)
     info("Tensor arena: 0x%08x, size: 0x%x (%u bytes)\n",
          (unsigned int)arm::app::tensorArena, (unsigned int)sizeof(arm::app::tensorArena),
          (unsigned int)sizeof(arm::app::tensorArena));
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+    /* Validate SD model format before Init (TFLite magic "TFL3" at offset 4) */
+    {
+        const uint8_t *pModel = arm::app::yolofastest::GetModelPointer();
+        size_t modelLen = arm::app::yolofastest::GetModelLen();
+        if (modelLen < 12 || pModel[4] != 0x54 || pModel[5] != 0x46 || pModel[6] != 0x4c || pModel[7] != 0x33)
+        {
+            printf_err("Invalid TFLite model: bad magic or size (len=%u)\n", (unsigned)modelLen);
+            vTaskDelete(nullptr);
+            return;
+        }
+        info("Model validated: TFL3 magic OK, size %u\n", (unsigned)modelLen);
+    }
+#endif
 
     if (!model.Init(arm::app::tensorArena,
                     sizeof(arm::app::tensorArena),
