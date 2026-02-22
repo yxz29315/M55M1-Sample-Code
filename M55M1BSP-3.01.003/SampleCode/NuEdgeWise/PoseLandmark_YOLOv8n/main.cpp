@@ -10,7 +10,6 @@
 #include "BoardInit.hpp"      /* Board initialisation */
 #include "log_macros.h"      /* Logging macros (optional) */
 
-#include "ethosu_mem_config.h" /* ACTIVATION_BUF_HYPERRAM_ATTRIBUTE - must be before BufAttributes */
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
 #include "MouthDetectionModel.hpp"
 #include "FaceDetectorPostProcessing.hpp"
@@ -68,13 +67,10 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena - MUST be in SRAM. Ethos-U55 can only access Flash + internal SRAM
- * for activation buffers (not HyperRAM/SPIM0). SRAM_NONCACHEABLE ~1KB, so ~1020KB free. */
-#undef ACTIVATION_BUF_SZ
-#define MOUTH_DETECTION_ACTIVATION_BUF_SZ  (0xFFC00)  /* 1020 KB - max that fits in SRAM */
-
-__attribute__((aligned(16), section(".bss.NoInit.activation_buf_sram")))
-static uint8_t tensorArena[MOUTH_DETECTION_ACTIVATION_BUF_SZ];
+/* Tensor arena - 2 MB for YOLO-Fastest 224x224. Uses same layout as working project:
+ * SRAM01_HYPERRAM overflows into SPIM0 (HyperRAM) when >1MB. Exercise model runs
+ * with 512KB arena entirely in HyperRAM, so this approach is proven. */
+static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 
 	
 } /* namespace app */
@@ -295,19 +291,19 @@ int main()
         return 1;
 	}
 
-    /* Setup MPU for tensor arena BEFORE model.Init() */
-    info("Set tensor arena cache policy to WTRA (SRAM)\n");
+    /* Setup MPU for tensor arena BEFORE model.Init() - same as working project (WTRA) */
+    info("Set tensor arena cache policy to WTRA\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
-            // Tensor arena in SRAM (Ethos-U can only use SRAM for activations)
+            // Tensor arena (SRAM + HyperRAM overflow - working project uses WTRA for both)
             ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
                          ARM_MPU_SH_NON,    // Non-shareable
                          0,                 // Read-only
                          1,                 // Non-Privileged
                          1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + MOUTH_DETECTION_ACTIVATION_BUF_SZ - 1),        // Limit
-                         eMPU_ATTR_CACHEABLE_WTRA) // WTRA for SRAM
+            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
+                         eMPU_ATTR_CACHEABLE_WTRA)
         },
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute

@@ -162,11 +162,9 @@ APP_IMAGE FLASH_START FLASH_SIZE
 	SRAM01_HYPERRAM AlignExpr(+0, 32) UNINIT
     {
         .ANY (.bss.sram.data)
-        .ANY (.bss.NoInit.activation_buf_sram)
-        .ANY (.bss.NoInit.activation_buf_hyperam)
+        .ANY1 (.bss.NoInit.activation_buf_sram)
     }
-    ; Ethos-U55 can only access Flash + internal SRAM for activation buffers (not HyperRAM/SPIM0)
-    ; Total must fit in SRAM01 (1 MB) - activation_buf shares with SRAM_NONCACHEABLE
+    ; Same as working project: allows overflow into SPIM0 (HyperRAM) when arena >1MB
     ScatterAssert((ImageLength(SRAM_NONCACHEABLE) + ImageLength(SRAM01_HYPERRAM)) < (SRAM01_ALIASE_SIZE + SPIM0_SIZE))
 
     ARM_LIB_STACK __STACK_TOP EMPTY - STACK_SIZE {}     ; Reserve empty region for stack
