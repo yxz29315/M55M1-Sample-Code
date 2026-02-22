@@ -14,9 +14,10 @@ This project supports loading a **YOLO-Fastest v1.1 mouth detection model** (224
 2. Go to **Options for Target** → **C/C++** → **Preprocessor Symbols** → **Define**
 3. Add to the existing defines:
    ```
-   __LOAD_MODEL_FROM_SD__, ACTIVATION_BUF_SZ=0x200000
+   __LOAD_MODEL_FROM_SD__, ACTIVATION_BUF_SZ=0x80000
    ```
-   (Replace `ACTIVATION_BUF_SZ=0x00130000` with `ACTIVATION_BUF_SZ=0x200000` for 2 MB tensor arena)
+   (Use ACTIVATION_BUF_SZ=0x80000 (512 KB) to keep tensor arena in SRAM - Ethos-U NPU
+   requires activation buffer in SRAM. 512 KB is sufficient for mouth model.)
 4. Build the project
 
 ## Default Build (Embedded 80-Class Model)

@@ -340,6 +340,10 @@ static void main_task(void *pvParameters)
     /* Model object creation and initialisation. */
     arm::app::YoloFastestModel model;
 
+    info("Tensor arena: 0x%08x, size: 0x%x (%u bytes)\n",
+         (unsigned int)arm::app::tensorArena, (unsigned int)sizeof(arm::app::tensorArena),
+         (unsigned int)sizeof(arm::app::tensorArena));
+
     if (!model.Init(arm::app::tensorArena,
                     sizeof(arm::app::tensorArena),
                     arm::app::yolofastest::GetModelPointer(),
@@ -719,7 +723,7 @@ int main()
 #endif
 
     /* Create main task. */
-    ret = xTaskCreate(main_task, "main task", 2 * 1024, nullptr, MAINLOOP_TASK_PRIO, nullptr);
+    ret = xTaskCreate(main_task, "main task", 8 * 1024, nullptr, MAINLOOP_TASK_PRIO, nullptr);
 
     if (ret != pdPASS)
     {
