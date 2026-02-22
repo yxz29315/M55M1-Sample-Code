@@ -293,21 +293,9 @@ static void main_task(void *pvParameters)
     BaseType_t ret;
     (void)pvParameters;
     info("main task running \n");
-    /* Model object creation and initialisation. */
-    arm::app::YoloFastestModel model;
 
-    if (!model.Init(arm::app::tensorArena,
-                    sizeof(arm::app::tensorArena),
-                    arm::app::yolofastest::GetModelPointer(),
-                    arm::app::yolofastest::GetModelLen()))
-    {
-        printf_err("Failed to initialise model\n");
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    /* Setup cache poicy of tensor arean buffer */
-    info("Set tesnor arena cache policy to WTRA \n");
+    /* Setup MPU for tensor arena BEFORE model.Init() - required for NPU to access arena (WTRA) */
+    info("Set tensor arena cache policy to WTRA\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
@@ -346,8 +334,21 @@ static void main_task(void *pvParameters)
 #endif
     };
 
-    // Setup MPU configuration
+    // Setup MPU configuration (must be before model.Init() for NPU tensor arena access)
     InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
+
+    /* Model object creation and initialisation. */
+    arm::app::YoloFastestModel model;
+
+    if (!model.Init(arm::app::tensorArena,
+                    sizeof(arm::app::tensorArena),
+                    arm::app::yolofastest::GetModelPointer(),
+                    arm::app::yolofastest::GetModelLen()))
+    {
+        printf_err("Failed to initialise model\n");
+        vTaskDelete(nullptr);
+        return;
+    }
 
     // Setup inference resource and create task
     struct ProcessTaskParams taskParam;
