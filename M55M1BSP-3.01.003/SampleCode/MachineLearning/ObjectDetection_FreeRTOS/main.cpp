@@ -13,6 +13,11 @@
 #include "log_macros.h"      /* Logging macros (optional) */
 
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+#include "ModelFileReader.h"
+#include "ff.h"
+#endif
 #include "InputFiles.hpp"             /* Baked-in input (not needed for live data) */
 #include "Labels.hpp"
 
@@ -206,6 +211,51 @@ static void omv_init()
     s_asFramebuf[1].frameImage.data = (uint8_t *)frame_buf1;
 #endif
 }
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+#define MODEL_AT_HYPERRAM_ADDR  (0x82400000)
+#define MODEL_FILE              "0:\\yolo-fastest-1.1-int8_vela.tflite"
+#define EACH_READ_SIZE          512
+
+extern int32_t g_loadedModelSize;
+
+static int32_t PrepareModelFromSD(void)
+{
+    TCHAR sd_path[] = { '0', ':', 0 };
+    f_chdrive(sd_path);
+
+    int32_t i32FileSize;
+    int32_t i32FileReadIndex = 0;
+    int32_t i32Read;
+
+    if (!ModelFileReader_Initialize(MODEL_FILE))
+    {
+        printf_err("Unable to open model %s\n", MODEL_FILE);
+        return -1;
+    }
+
+    i32FileSize = ModelFileReader_FileSize();
+    info("Model file size %d\n", i32FileSize);
+
+    while (i32FileReadIndex < i32FileSize)
+    {
+        i32Read = ModelFileReader_ReadData((BYTE *)(MODEL_AT_HYPERRAM_ADDR + i32FileReadIndex), EACH_READ_SIZE);
+        if (i32Read < 0)
+            break;
+        i32FileReadIndex += i32Read;
+    }
+
+    if (i32FileReadIndex < i32FileSize)
+    {
+        printf_err("Read model file size is not enough\n");
+        ModelFileReader_Finish();
+        return -2;
+    }
+
+    ModelFileReader_Finish();
+    return i32FileSize;
+}
+#endif
 
 static bool PresentInferenceResult(const std::vector<arm::app::object_detection::DetectionResult> &results,
                                    std::vector<std::string> &labels)
@@ -653,6 +703,19 @@ int main()
 
     /* Initialize the UART module to allow printf related functions (if using retarget) */
     BoardInit();
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+    /* Load model from SD card to HyperRAM before starting inference task */
+    info("Loading model from SD card...\n");
+    int32_t modelSize = PrepareModelFromSD();
+    if (modelSize <= 0)
+    {
+        printf_err("Failed to load model from SD card\n");
+        return -1;
+    }
+    g_loadedModelSize = modelSize;
+    info("Model loaded: %d bytes\n", modelSize);
+#endif
 
     /* Create main task. */
     ret = xTaskCreate(main_task, "main task", 2 * 1024, nullptr, MAINLOOP_TASK_PRIO, nullptr);

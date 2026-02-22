@@ -469,6 +469,41 @@
               <FileType>1</FileType>
               <FilePath>..\..\..\..\Library\StdDriver\src\pdma.c</FilePath>
             </File>
+            <File>
+              <FileName>sdh.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\..\Library\StdDriver\src\sdh.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>SDCard_FatFs</GroupName>
+          <Files>
+            <File>
+              <FileName>ModelFileReader.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\ModelFileReader.c</FilePath>
+            </File>
+            <File>
+              <FileName>sdglue.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Device\SDCard\sdglue.c</FilePath>
+            </File>
+            <File>
+              <FileName>ff.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\..\ThirdParty\FatFs\source\ff.c</FilePath>
+            </File>
+            <File>
+              <FileName>ffunicode.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\..\ThirdParty\FatFs\source\ffunicode.c</FilePath>
+            </File>
+            <File>
+              <FileName>diskio_SDH.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\..\Library\Storage\diskio_SDH.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -548,6 +583,16 @@
               <FileName>YoloFastestModel.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\Model\YoloFastestModel.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>MouthModelConfig.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Model\MouthModelConfig.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>MouthLabels.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Model\MouthLabels.cpp</FilePath>
             </File>
           </Files>
         </Group>

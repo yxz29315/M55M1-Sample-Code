@@ -14,8 +14,25 @@
 #include "ethosu_npu_init.h"
 #include "hyperram_code.h"
 
+#if defined(__LOAD_MODEL_FROM_SD__)
+#include "Device/SDCard/sdglue.h"
+#endif
+
 #define DESIGN_NAME "M55M1"
 #define HYPERRAM_SPIM_PORT SPIM0
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+static void SDCard_PinConfig(void)
+{
+    SET_SD0_nCD_PD13();
+    SET_SD0_CLK_PE6();
+    SET_SD0_CMD_PE7();
+    SET_SD0_DAT0_PE2();
+    SET_SD0_DAT1_PE3();
+    SET_SD0_DAT2_PE4();
+    SET_SD0_DAT3_PE5();
+}
+#endif
 
 static void SYS_Init(void)
 {
@@ -37,6 +54,11 @@ static void SYS_Init(void)
 
     /* Switch SCLK clock source to APLL0 and Enable APLL0 220MHz clock */
     CLK_SetBusClock(CLK_SCLKSEL_SCLKSEL_APLL0, CLK_APLLCTL_APLLSRC_HIRC, FREQ_220MHZ);
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+    /* Enable APLL1 for SDH clock */
+    CLK_EnableAPLL(CLK_APLLCTL_APLLSRC_HIRC, FREQ_220MHZ, CLK_APLL1_SELECT);
+#endif
 
     /* Update System Core Clock */
     /* User can use SystemCoreClockUpdate() to calculate SystemCoreClock. */
@@ -63,6 +85,12 @@ static void SYS_Init(void)
     /* Enable CCAP0 module clock */
     CLK_EnableModuleClock(CCAP0_MODULE);
 
+#if defined(__LOAD_MODEL_FROM_SD__)
+    /* Enable SDH0 module clock for SD card */
+    CLK_EnableModuleClock(SDH0_MODULE);
+    CLK_SetModuleClock(SDH0_MODULE, CLK_SDHSEL_SDH0SEL_APLL1_DIV2, CLK_SDHDIV_SDH0DIV(5));
+#endif
+
     /* Select UART6 module clock source as HIRC and UART6 module clock divider as 1 */
     SetDebugUartCLK();
 
@@ -74,6 +102,10 @@ static void SYS_Init(void)
     SetDebugUartMFP();
 
     HyperRAM_PinConfig(HYPERRAM_SPIM_PORT);
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+    SDCard_PinConfig();
+#endif
 }
 
 /**
@@ -98,6 +130,14 @@ int BoardInit(void)
     HyperRAM_Init(HYPERRAM_SPIM_PORT);
     /* Enter direct-mapped mode to run new applications */
     SPIM_HYPER_EnterDirectMapMode(HYPERRAM_SPIM_PORT);
+
+#if defined(__LOAD_MODEL_FROM_SD__)
+    info("SD card init...\n");
+    if (SDH_Open_Disk(SDH0, CardDetect_From_GPIO) != SDH_OK)
+    {
+        info("SD card init failed (card may not be inserted)\n");
+    }
+#endif
 
     info("%s: complete\n", __FUNCTION__);
 

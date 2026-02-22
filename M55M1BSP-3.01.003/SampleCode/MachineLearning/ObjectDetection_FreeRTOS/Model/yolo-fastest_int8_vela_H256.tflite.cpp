@@ -19,6 +19,8 @@
  * Generated from gen_model_cpp.py tool and yolo-fastest_int8_vela_256.tflite file.
  * Date: 2024-03-07 16:57:57.920875
  ***************************************************************************/
+#if !defined(__LOAD_MODEL_FROM_SD__)
+
 #include "BufAttributes.hpp"
 
 #include <cstddef>
@@ -16477,3 +16479,5 @@ size_t GetModelLen()
 } /* namespace arm */
 } /* namespace app */
 } /* namespace yolofastest */
+
+#endif /* !__LOAD_MODEL_FROM_SD__ */

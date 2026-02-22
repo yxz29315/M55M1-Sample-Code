@@ -4,6 +4,8 @@
 #include <vector>
 #include <string>
 
+#if !defined(__LOAD_MODEL_FROM_SD__)
+
 static const char *labelsVec[] LABELS_ATTRIBUTE =
 {
     "person",
@@ -107,4 +109,6 @@ bool GetLabelsVector(std::vector<std::string> &labels)
 
     return true;
 }
+
+#endif /* !__LOAD_MODEL_FROM_SD__ */
 
