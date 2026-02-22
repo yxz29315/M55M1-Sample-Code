@@ -16,11 +16,12 @@
 int32_t g_loadedModelSize = 0;
 
 /* YOLO-Fastest v1.1 224x224 - anchors scaled from 320x320 (scale = 224/320 = 0.7) */
-const int originalImageSize = 224;
-const int channelsImageDisplayed = 3;
-const float anchor1[] = {8, 13, 26, 34, 36, 92};
-const float anchor2[] = {80, 51, 83, 139, 169, 167};
-const int numClasses = 2;
+/* extern for external linkage - referenced by main.cpp and DetectorPostProcessing.cpp */
+extern const int originalImageSize = 224;
+extern const int channelsImageDisplayed = 3;
+extern const float anchor1[] = {8, 13, 26, 34, 36, 92};
+extern const float anchor2[] = {80, 51, 83, 139, 169, 167};
+extern const int numClasses = 2;
 
 namespace arm
 {
