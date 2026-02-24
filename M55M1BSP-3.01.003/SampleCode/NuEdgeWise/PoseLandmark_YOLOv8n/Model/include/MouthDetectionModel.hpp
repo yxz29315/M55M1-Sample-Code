@@ -2,8 +2,8 @@
  * @file     MouthDetectionModel.hpp
  * @version  V1.00
  * @brief    Mouth detection model (YOLO-Fastest v1.1) header file.
- *           Input: 224x224 RGB, int8 = uint8 - 128
- *           Output: 2 tensors (stride 32: 7x7, stride 16: 14x14)
+ *           Input: 192x192 RGB, int8 = uint8 - 128
+ *           Output: 2 tensors (stride 32: 6x6, stride 16: 12x12)
  *           Classes: 0 = mouth closed, 1 = mouth open
  *
  * @copyright SPDX-License-Identifier: Apache-2.0

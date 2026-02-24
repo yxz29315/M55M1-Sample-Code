@@ -9,11 +9,11 @@
 #include "MouthDetectionModel.hpp"
 #include "log_macros.h"
 
-/* YOLO-Fastest v1.1 mouth anchors - stride 32 (7x7) */
-const float mouth_anchor1[] = {26.0f, 15.0f, 22.0f, 26.0f, 31.0f, 21.0f};
+/* YOLO-Fastest v1.1 192x192 mouth anchors - stride 32 (6x6), k-means on dataset */
+const float mouth_anchor1[] = {22.0f, 13.0f, 20.0f, 24.0f, 27.0f, 19.0f};
 
-/* YOLO-Fastest v1.1 mouth anchors - stride 16 (14x14) */
-const float mouth_anchor2[] = {29.0f, 34.0f, 35.0f, 47.0f, 111.0f, 130.0f};
+/* YOLO-Fastest v1.1 192x192 mouth anchors - stride 16 (12x12) */
+const float mouth_anchor2[] = {27.0f, 33.0f, 75.0f, 110.0f, 112.0f, 113.0f};
 
 const tflite::MicroOpResolver &arm::app::MouthDetectionModel::GetOpResolver()
 {

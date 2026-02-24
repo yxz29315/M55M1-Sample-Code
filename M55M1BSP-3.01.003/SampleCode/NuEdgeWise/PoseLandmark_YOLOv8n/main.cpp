@@ -191,7 +191,7 @@ static void omv_init()
 #endif
 }
 
-static const char *MOUTH_LABELS[] = { "Closed", "Speaking" };
+static const char *MOUTH_LABELS[] = { "mouth closed", "mouth open" };
 
 static void DrawMouthDetections(
     const std::vector<arm::app::face_detection::DetectionResult> &results,
@@ -304,6 +304,11 @@ int main()
                          1),                // eXecute Never enabled
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA)
+        },
+        {
+            // Model in HyperRAM - Non-cacheable for NPU DMA access
+            ARM_MPU_RBAR(0x82400000, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(0x8247FFFF, eMPU_ATTR_NON_CACHEABLE)  // 512KB region for model
         },
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
