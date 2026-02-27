@@ -41,8 +41,8 @@
 
 #define NUM_FRAMEBUF 2  //1 or 2
 
-/* Model at 0x82480000 to avoid overlap with tensor arena (0x81f00400 + 5MB = 0x82400400) */
-#define MODEL_AT_HYPERRAM_ADDR (0x82480000)
+/* Model in HyperRAM - arena is 512KB in SRAM only, so no overlap */
+#define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
 #define MOUTH_DETECTION_THRESHOLD  				(0.5f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
