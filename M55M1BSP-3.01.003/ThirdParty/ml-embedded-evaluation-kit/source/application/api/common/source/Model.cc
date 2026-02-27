@@ -33,6 +33,7 @@ bool arm::app::Model::Init(uint8_t* tensorArenaAddr,
                            uint32_t nnModelSize,
                            tflite::MicroAllocator* allocator)
 {
+    info("Model::Init start, model @ 0x%p size %u\n", nnModelAddr, (unsigned)nnModelSize);
     /* Following tf lite micro example:
      * Map the model into a usable data structure. This doesn't involve any
      * copying or parsing, it's a very lightweight operation. */
@@ -61,7 +62,9 @@ bool arm::app::Model::Init(uint8_t* tensorArenaAddr,
     /* NOLINTNEXTLINE(runtime-global-variables) */
     debug("loading op resolver\n");
 
+    info("Model::Init before EnlistOperations\n");
     this->EnlistOperations();
+    info("Model::Init after EnlistOperations\n");
 
     /* Create allocator instance, if it doesn't exist */
     this->m_pAllocator = allocator;
