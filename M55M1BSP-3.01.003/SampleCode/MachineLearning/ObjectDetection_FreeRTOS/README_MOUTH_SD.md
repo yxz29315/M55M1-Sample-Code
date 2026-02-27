@@ -13,7 +13,7 @@ This project supports loading a **YOLO-Fastest v1.1 mouth detection model** (192
 1. Open the Keil project: `KEIL/ObjectDetection_FreeRTOS.uvprojx`
 2. Ensure **Options for Target** → **C/C++** → **Preprocessor Symbols** includes:
    ```
-   __LOAD_MODEL_FROM_SD__, ACTIVATION_BUF_SZ=0x300000
+   __LOAD_MODEL_FROM_SD__, ACTIVATION_BUF_SZ=0x80000
    ```
 3. Build the project (F7)
 

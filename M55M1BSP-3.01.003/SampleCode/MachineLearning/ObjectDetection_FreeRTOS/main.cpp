@@ -294,57 +294,7 @@ static void main_task(void *pvParameters)
     (void)pvParameters;
     info("main task running \n");
 
-    /* Setup MPU for tensor arena BEFORE model.Init() - required for NPU to access arena (WTRA) */
-    info("Set tensor arena cache policy to WTRA\n");
-    std::vector<ARM_MPU_Region_t> mpuConfig =
-    {
-        {
-            // SRAM for tensor arena
-            ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
-                         ARM_MPU_SH_NON,    // Non-shareable
-                         0,                 // Read-only
-                         1,                 // Non-Privileged
-                         1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
-                         eMPU_ATTR_CACHEABLE_WTRA) // Attribute index - cacheable WTRA
-        },
-#if defined(__LOAD_MODEL_FROM_SD__)
-        {
-            // Model in HyperRAM - Non-cacheable for NPU DMA access
-            ARM_MPU_RBAR(0x82400000, ARM_MPU_SH_NON, 0, 1, 1),
-            ARM_MPU_RLAR(0x8247FFFF, eMPU_ATTR_NON_CACHEABLE)  // 512KB region for model
-        },
-#endif
-#if defined (__USE_CCAP__)
-        {
-            // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
-            ARM_MPU_RBAR(((unsigned int)fb_array),        // Base
-                         ARM_MPU_SH_NON,    // Non-shareable
-                         0,                 // Read-only
-                         1,                 // Non-Privileged
-                         1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)fb_array) + OMV_FB_SIZE - 1),        // Limit
-                         eMPU_ATTR_NON_CACHEABLE) // NonCache
-        },
-#if (NUM_FRAMEBUF == 2)
-        {
-            // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
-            ARM_MPU_RBAR(((unsigned int)frame_buf1),        // Base
-                         ARM_MPU_SH_NON,    // Non-shareable
-                         0,                 // Read-only
-                         1,                 // Non-Privileged
-                         1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)frame_buf1) + OMV_FB_SIZE - 1),        // Limit
-                         eMPU_ATTR_NON_CACHEABLE) // NonCache
-        },
-#endif
-#endif
-    };
-
-    // Setup MPU configuration (must be before model.Init() for NPU tensor arena access)
-    InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
-
-    /* Model object creation and initialisation. */
+    /* Model init BEFORE MPU - matches working project (PoseLandmark_YOLOv8n_workout_w_accel) */
     arm::app::YoloFastestModel model;
 
     info("Tensor arena: 0x%08x, size: 0x%x (%u bytes)\n",
@@ -375,6 +325,43 @@ static void main_task(void *pvParameters)
         vTaskDelete(nullptr);
         return;
     }
+
+    /* Setup MPU AFTER model.Init() - same as working project */
+    info("Set tensor arena cache policy to WTRA\n");
+    std::vector<ARM_MPU_Region_t> mpuConfig =
+    {
+        {
+            // SRAM for tensor arena
+            ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
+                         ARM_MPU_SH_NON,    // Non-shareable
+                         0,                 // Read-only
+                         1,                 // Non-Privileged
+                         1),                // eXecute Never enabled
+            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
+                         eMPU_ATTR_CACHEABLE_WTRA)
+        },
+#if defined(__LOAD_MODEL_FROM_SD__)
+        {
+            // Model in HyperRAM - Non-cacheable for NPU DMA access
+            ARM_MPU_RBAR(0x82400000, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(0x8247FFFF, eMPU_ATTR_NON_CACHEABLE)  // 512KB region for model
+        },
+#endif
+#if defined (__USE_CCAP__)
+        {
+            // Image data from CCAP DMA
+            ARM_MPU_RBAR(((unsigned int)fb_array), ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR((((unsigned int)fb_array) + OMV_FB_SIZE - 1), eMPU_ATTR_NON_CACHEABLE)
+        },
+#if (NUM_FRAMEBUF == 2)
+        {
+            ARM_MPU_RBAR(((unsigned int)frame_buf1), ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR((((unsigned int)frame_buf1) + OMV_FB_SIZE - 1), eMPU_ATTR_NON_CACHEABLE)
+        },
+#endif
+#endif
+    };
+    InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
 
     // Setup inference resource and create task
     struct ProcessTaskParams taskParam;
