@@ -335,7 +335,9 @@ int main()
     };
 
     // Setup MPU configuration (must be before model.Init() for HyperRAM tensor arena)
+    info("Before InitPreDefMPURegion\n");
     InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
+    info("After InitPreDefMPURegion, before model.Init\n");
 
     /* Model object creation and initialisation. */
     arm::app::MouthDetectionModel model;
@@ -348,6 +350,7 @@ int main()
         printf_err("Failed to initialise model\n");
         return 1;
     }
+    info("Model init OK\n");
 
     TfLiteTensor *inputTensor   = model.GetInputTensor(0);
 
