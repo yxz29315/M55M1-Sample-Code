@@ -339,6 +339,20 @@ int main()
     InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
     info("After InitPreDefMPURegion, before model.Init\n");
 
+    /* Ensure SD writes to HyperRAM are visible before CPU reads model */
+    __DSB();
+    __DMB();
+
+    /* Sanity check: verify TFLite magic at model start (TFL3 at offset 4) */
+    const uint8_t *pModel = (const uint8_t *)MODEL_AT_HYPERRAM_ADDR;
+    if (i32ModelSize < 12 || pModel[4] != 0x54 || pModel[5] != 0x46 || pModel[6] != 0x4c || pModel[7] != 0x33)
+    {
+        printf_err("Invalid TFLite model at 0x%08x: bad magic or size (len=%d)\n",
+                   (unsigned)MODEL_AT_HYPERRAM_ADDR, (int)i32ModelSize);
+        return 1;
+    }
+    info("Model magic TFL3 OK, readable from HyperRAM\n");
+
     /* Model object creation and initialisation. */
     arm::app::MouthDetectionModel model;
 
