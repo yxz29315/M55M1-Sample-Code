@@ -41,7 +41,8 @@
 
 #define NUM_FRAMEBUF 2  //1 or 2
 
-#define MODEL_AT_HYPERRAM_ADDR (0x82400000)
+/* Model at 0x82480000 to avoid overlap with tensor arena (0x81f00400 + 5MB = 0x82400400) */
+#define MODEL_AT_HYPERRAM_ADDR (0x82480000)
 
 #define MOUTH_DETECTION_THRESHOLD  				(0.5f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
@@ -305,7 +306,7 @@ int main()
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA)
         },
-        /* No explicit MPU region for model at 0x82400000 - use default (working project doesn't have it) */
+        /* No explicit MPU region for model - use default (working project doesn't have it) */
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
             ARM_MPU_RBAR(((unsigned int)fb_array),        // Base
