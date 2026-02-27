@@ -55,7 +55,7 @@
  */
 
 #ifndef STACK_SIZE
-#define STACK_SIZE 0x10000
+#define STACK_SIZE 0xa000
 #endif
 
 #ifndef HEAP_SIZE
