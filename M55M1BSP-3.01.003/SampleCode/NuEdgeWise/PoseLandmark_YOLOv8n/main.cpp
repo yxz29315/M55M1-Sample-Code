@@ -41,8 +41,8 @@
 
 #define NUM_FRAMEBUF 2  //1 or 2
 
-/* Model in HyperRAM - arena is 512KB in SRAM only, so no overlap */
-#define MODEL_AT_HYPERRAM_ADDR (0x82400000)
+/* Model at 0x82480000 - arena 3MB ends at 0x82200400, so no overlap (matches ObjectDetection_FreeRTOS mouth) */
+#define MODEL_AT_HYPERRAM_ADDR (0x82480000)
 
 #define MOUTH_DETECTION_THRESHOLD  				(0.5f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
