@@ -305,11 +305,7 @@ int main()
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA)
         },
-        {
-            // Model in HyperRAM - Non-cacheable for NPU DMA access
-            ARM_MPU_RBAR(0x82400000, ARM_MPU_SH_NON, 0, 1, 1),
-            ARM_MPU_RLAR(0x8247FFFF, eMPU_ATTR_NON_CACHEABLE)  // 512KB region for model
-        },
+        /* No explicit MPU region for model at 0x82400000 - use default (working project doesn't have it) */
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
             ARM_MPU_RBAR(((unsigned int)fb_array),        // Base
