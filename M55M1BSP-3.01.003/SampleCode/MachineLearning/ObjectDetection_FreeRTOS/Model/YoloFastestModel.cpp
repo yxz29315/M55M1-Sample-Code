@@ -33,6 +33,7 @@ bool arm::app::YoloFastestModel::EnlistOperations()
     this->m_opResolver.AddPad();
     this->m_opResolver.AddMaxPool2D();
     this->m_opResolver.AddConcatenation();
+    this->m_opResolver.AddTranspose();  /* Mouth model may use Transpose */
 
 #if defined(ARM_NPU)
 
