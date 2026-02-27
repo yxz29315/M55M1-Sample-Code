@@ -22,6 +22,14 @@ const tflite::MicroOpResolver &arm::app::MouthDetectionModel::GetOpResolver()
 
 bool arm::app::MouthDetectionModel::EnlistOperations()
 {
+    /* Same ops as YoloFastestModel - mouth model is YOLO-Fastest architecture */
+    this->m_opResolver.AddDepthwiseConv2D();
+    this->m_opResolver.AddConv2D();
+    this->m_opResolver.AddAdd();
+    this->m_opResolver.AddResizeNearestNeighbor();
+    this->m_opResolver.AddPad();
+    this->m_opResolver.AddMaxPool2D();
+    this->m_opResolver.AddConcatenation();
     this->m_opResolver.AddTranspose();
 
 #if defined(ARM_NPU)
