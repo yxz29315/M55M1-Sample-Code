@@ -41,8 +41,8 @@
 
 #define NUM_FRAMEBUF 2  //1 or 2
 
-/* Model at 0x82480000 - arena 3MB ends at 0x82200400, so no overlap (matches ObjectDetection_FreeRTOS mouth) */
-#define MODEL_AT_HYPERRAM_ADDR (0x82480000)
+/* Same as working project: 0x82400000 (exercise model works at this addr) */
+#define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
 #define MOUTH_DETECTION_THRESHOLD  				(0.5f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
@@ -68,9 +68,7 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena - 2 MB for YOLO-Fastest 224x224. Uses same layout as working project:
- * SRAM01_HYPERRAM overflows into SPIM0 (HyperRAM) when >1MB. Exercise model runs
- * with 512KB arena entirely in HyperRAM, so this approach is proven. */
+/* Tensor arena - 512KB like exercise model in working project (YOLO-Fastest is small) */
 static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 
 	
@@ -292,12 +290,39 @@ int main()
         return 1;
 	}
 
-    /* Setup MPU for tensor arena BEFORE model.Init() - same as working project (WTRA) */
+    /* Ensure SD writes to HyperRAM are visible before CPU reads model */
+    __DSB();
+    __DMB();
+
+    /* Sanity check: verify TFLite magic at model start (TFL3 at offset 4) */
+    const uint8_t *pModel = (const uint8_t *)MODEL_AT_HYPERRAM_ADDR;
+    if (i32ModelSize < 12 || pModel[4] != 0x54 || pModel[5] != 0x46 || pModel[6] != 0x4c || pModel[7] != 0x33)
+    {
+        printf_err("Invalid TFLite model at 0x%08x: bad magic or size (len=%d)\n",
+                   (unsigned)MODEL_AT_HYPERRAM_ADDR, (int)i32ModelSize);
+        return 1;
+    }
+    info("Model magic TFL3 OK, readable from HyperRAM\n");
+
+    /* Model init BEFORE MPU - matches working project (pose + exercise) */
+    arm::app::MouthDetectionModel model;
+
+    if (!model.Init(arm::app::tensorArena,
+                    sizeof(arm::app::tensorArena),
+                    (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
+                    i32ModelSize))
+    {
+        printf_err("Failed to initialise model\n");
+        return 1;
+    }
+    info("Model init OK\n");
+
+    /* Setup MPU for tensor arena AFTER model.Init() - same as working project */
     info("Set tensor arena cache policy to WTRA\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
-            // Tensor arena (SRAM + HyperRAM overflow - working project uses WTRA for both)
+            // SRAM for tensor arena
             ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
                          ARM_MPU_SH_NON,    // Non-shareable
                          0,                 // Read-only
@@ -306,7 +331,6 @@ int main()
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA)
         },
-        /* No MPU region for model - adding one caused CPU read hang earlier */
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
             ARM_MPU_RBAR(((unsigned int)fb_array),        // Base
@@ -331,37 +355,7 @@ int main()
 #endif
     };
 
-    // Setup MPU configuration (must be before model.Init() for HyperRAM tensor arena)
-    info("Before InitPreDefMPURegion\n");
     InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
-    info("After InitPreDefMPURegion, before model.Init\n");
-
-    /* Ensure SD writes to HyperRAM are visible before CPU reads model */
-    __DSB();
-    __DMB();
-
-    /* Sanity check: verify TFLite magic at model start (TFL3 at offset 4) */
-    const uint8_t *pModel = (const uint8_t *)MODEL_AT_HYPERRAM_ADDR;
-    if (i32ModelSize < 12 || pModel[4] != 0x54 || pModel[5] != 0x46 || pModel[6] != 0x4c || pModel[7] != 0x33)
-    {
-        printf_err("Invalid TFLite model at 0x%08x: bad magic or size (len=%d)\n",
-                   (unsigned)MODEL_AT_HYPERRAM_ADDR, (int)i32ModelSize);
-        return 1;
-    }
-    info("Model magic TFL3 OK, readable from HyperRAM\n");
-
-    /* Model object creation and initialisation. */
-    arm::app::MouthDetectionModel model;
-
-    if (!model.Init(arm::app::tensorArena,
-                    sizeof(arm::app::tensorArena),
-                    (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
-                    i32ModelSize))
-    {
-        printf_err("Failed to initialise model\n");
-        return 1;
-    }
-    info("Model init OK\n");
 
     TfLiteTensor *inputTensor   = model.GetInputTensor(0);
 
