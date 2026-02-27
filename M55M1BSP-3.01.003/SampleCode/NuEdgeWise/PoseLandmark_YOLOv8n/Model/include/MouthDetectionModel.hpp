@@ -36,7 +36,7 @@ protected:
     bool EnlistOperations() override;
 
 private:
-    static constexpr int ms_maxOpCnt = 2;
+    static constexpr int ms_maxOpCnt = 10;  /* Same as YoloFastest: Conv2D, DepthwiseConv2D, Add, Resize, Pad, MaxPool, Concat, Transpose, Ethos-U + margin */
     tflite::MicroMutableOpResolver<ms_maxOpCnt> m_opResolver;
 };
 
