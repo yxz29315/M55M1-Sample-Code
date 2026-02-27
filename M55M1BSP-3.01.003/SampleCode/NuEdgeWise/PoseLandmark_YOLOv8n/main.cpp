@@ -306,7 +306,7 @@ int main()
             ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA)
         },
-        /* No explicit MPU region for model - use default (working project doesn't have it) */
+        /* No MPU region for model - adding one caused CPU read hang earlier */
         {
             // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
             ARM_MPU_RBAR(((unsigned int)fb_array),        // Base
