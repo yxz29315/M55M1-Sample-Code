@@ -22,13 +22,13 @@
 #define MOUTH_STRIDE_16         16
 #define MOUTH_STRIDE_32         32
 
-/* Output tensor indices: box P3, P4, P5 then cls P3, P4, P5 */
-#define MOUTH_BOX_P3_INDEX      0   /* [1, 576, 64] */
-#define MOUTH_BOX_P4_INDEX      1   /* [1, 144, 64] */
-#define MOUTH_BOX_P5_INDEX      2   /* [1, 36, 64] */
+/* Output tensor indices - from actual model (log shows order: 0=cls P4, 1=box P4, 2=cls P5, 3=cls P3, 4=box P3, 5=box P5) */
+#define MOUTH_BOX_P3_INDEX      4   /* [1, 576, 64] stride 8 */
+#define MOUTH_BOX_P4_INDEX      1   /* [1, 144, 64] stride 16 */
+#define MOUTH_BOX_P5_INDEX      5   /* [1, 36, 64] stride 32 */
 #define MOUTH_CLS_P3_INDEX      3   /* [1, 576, 2] */
-#define MOUTH_CLS_P4_INDEX      4   /* [1, 144, 2] */
-#define MOUTH_CLS_P5_INDEX      5   /* [1, 36, 2] */
+#define MOUTH_CLS_P4_INDEX      0   /* [1, 144, 2] */
+#define MOUTH_CLS_P5_INDEX      2   /* [1, 36, 2] */
 
 namespace arm
 {
