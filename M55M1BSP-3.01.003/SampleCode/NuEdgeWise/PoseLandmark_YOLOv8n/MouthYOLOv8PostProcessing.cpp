@@ -15,7 +15,7 @@
 
 using namespace arm::app::mouth_detection;
 
-/* Debug: set to 1 to log max confidence every 30 frames (helps tune threshold) */
+/* Debug: set to 1 to log raw max confidence from tensor (before threshold) */
 #define MOUTH_DEBUG_MAX_CONF 1
 
 static void AnchorMatrixConstruct(
@@ -272,21 +272,33 @@ void MouthYOLOv8PostProcessing::RunPostProcessing(
     float fXScale = static_cast<float>(imgSrcCols) / static_cast<float>(MOUTH_INPUT_SIZE);
     float fYScale = static_cast<float>(imgSrcRows) / static_cast<float>(MOUTH_INPUT_SIZE);
 
-    std::forward_list<MouthDetection> sDetections;
-    GetNetworkBoxes(sDetections);
+    /* Debug: scan raw cls tensors for max sigmoid value (before threshold filter) */
 #if MOUTH_DEBUG_MAX_CONF
     {
-        float maxConf = 0.f;
-        int numBeforeNMS = 0;
-        for (auto it = sDetections.begin(); it != sDetections.end(); ++it) {
-            numBeforeNMS++;
-            for (size_t c = 0; c < it->prob.size(); c++)
-                if (it->prob[c] > maxConf) maxConf = it->prob[c];
-        }
         static int dbgCnt = 0;
-        if (++dbgCnt >= 30) { dbgCnt = 0; info("mouth: beforeNMS=%d maxConf=%.3f th=%.2f\n", numBeforeNMS, maxConf, m_threshold); }
+        if (++dbgCnt >= 30) {
+            dbgCnt = 0;
+            float maxSigmoid = 0.f;
+            const int clsIndices[] = { MOUTH_CLS_P4_INDEX, MOUTH_CLS_P5_INDEX, MOUTH_CLS_P3_INDEX };
+            for (int t = 0; t < 3; t++) {
+                TfLiteTensor *cls = m_model->GetOutputTensor(clsIndices[t]);
+                float scale = ((TfLiteAffineQuantization *)(cls->quantization.params))->scale->data[0];
+                int zp = ((TfLiteAffineQuantization *)(cls->quantization.params))->zero_point->data[0];
+                int8_t *d = cls->data.int8;
+                int numAnchors = cls->dims->data[1];
+                int numCls = cls->dims->data[2];
+                for (int i = 0; i < numAnchors * numCls; i++) {
+                    float s = arm::app::math::MathUtils::SigmoidF32(scale * (static_cast<float>(d[i]) - zp));
+                    if (s > maxSigmoid) maxSigmoid = s;
+                }
+            }
+            info("mouth: rawMaxSigmoid=%.3f (th=%.2f)\n", maxSigmoid, m_threshold);
+        }
     }
 #endif
+
+    std::forward_list<MouthDetection> sDetections;
+    GetNetworkBoxes(sDetections);
     CalculateNMS(sDetections, MOUTH_NUM_CLASSES, m_iouThreshold);
 
     resultsOut.clear();
