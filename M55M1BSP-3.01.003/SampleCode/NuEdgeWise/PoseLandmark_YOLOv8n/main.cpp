@@ -475,14 +475,22 @@ int main()
 #if defined(__PROFILE__)
             u64StartCycle = pmu_get_systick_Count();
 #endif
-			//Quantize input tensor data
+			// Swap RGB->BGR if model was trained on OpenCV/BGR (common for Ultralytics)
+			{
+				uint8_t *p = static_cast<uint8_t *>(inputTensor->data.data);
+				const size_t numPixels = inputImgCols * inputImgRows;
+				for (size_t i = 0; i < numPixels; i++)
+				{
+					uint8_t t = p[i * 3 + 0];
+					p[i * 3 + 0] = p[i * 3 + 2];
+					p[i * 3 + 2] = t;
+				}
+			}
+			// Quantize: int8 = uint8 - 128
 			auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
 			auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
-
 			for (size_t i = 0; i < inputTensor->bytes; i++)
 			{
-//				auto i_data_int8 = static_cast<int8_t>(((static_cast<float>(req_data[i]) / 255.0f) / inQuantParams.scale) + inQuantParams.offset);
-//				signed_req_data[i] = std::min<int8_t>(INT8_MAX, std::max<int8_t>(i_data_int8, INT8_MIN));
 				signed_req_data[i] = static_cast<int8_t>(req_data[i]) - 128;
 			}
 
