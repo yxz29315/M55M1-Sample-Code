@@ -9,10 +9,14 @@
 #include "MouthYOLOv8PostProcessing.hpp"
 #include "PlatformMath.hpp"
 #include "TensorFlowLiteMicro.hpp"
+#include "log_macros.h"
 
 #include <cmath>
 
 using namespace arm::app::mouth_detection;
+
+/* Debug: set to 1 to log max confidence every 30 frames (helps tune threshold) */
+#define MOUTH_DEBUG_MAX_CONF 1
 
 static void AnchorMatrixConstruct(
     std::vector<AnchorBox> &vAnchorBoxs,
@@ -270,6 +274,19 @@ void MouthYOLOv8PostProcessing::RunPostProcessing(
 
     std::forward_list<MouthDetection> sDetections;
     GetNetworkBoxes(sDetections);
+#if MOUTH_DEBUG_MAX_CONF
+    {
+        float maxConf = 0.f;
+        int numBeforeNMS = 0;
+        for (auto it = sDetections.begin(); it != sDetections.end(); ++it) {
+            numBeforeNMS++;
+            for (size_t c = 0; c < it->prob.size(); c++)
+                if (it->prob[c] > maxConf) maxConf = it->prob[c];
+        }
+        static int dbgCnt = 0;
+        if (++dbgCnt >= 30) { dbgCnt = 0; info("mouth: beforeNMS=%d maxConf=%.3f th=%.2f\n", numBeforeNMS, maxConf, m_threshold); }
+    }
+#endif
     CalculateNMS(sDetections, MOUTH_NUM_CLASSES, m_iouThreshold);
 
     resultsOut.clear();
