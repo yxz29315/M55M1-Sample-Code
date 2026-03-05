@@ -500,9 +500,9 @@
               <FilePath>..\ModelFileReader.c</FilePath>
             </File>
             <File>
-              <FileName>FaceDetectorPostProcessing.cpp</FileName>
+              <FileName>MouthYOLOv8PostProcessing.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\FaceDetectorPostProcessing.cpp</FilePath>
+              <FilePath>..\MouthYOLOv8PostProcessing.cpp</FilePath>
             </File>
           </Files>
         </Group>

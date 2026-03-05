@@ -1,7 +1,7 @@
 /**************************************************************************//**
  * @file     main.cpp
  * @version  V1.00
- * @brief    Mouth detection sample (YOLO-Fastest v1.1). Detects mouth open/closed.
+ * @brief    Mouth detection sample (YOLOv8n ReLU6). Detects mouth open/closed.
  *
  * @copyright SPDX-License-Identifier: Apache-2.0
  * @copyright Copyright (C) 2023 Nuvoton Technology Corp. All rights reserved.
@@ -12,7 +12,7 @@
 
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
 #include "MouthDetectionModel.hpp"
-#include "FaceDetectorPostProcessing.hpp"
+#include "MouthYOLOv8PostProcessing.hpp"
 #include "FaceDetectionResult.hpp"
 
 #include "imlib.h"          /* Image processing */
@@ -68,7 +68,7 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena - 512KB like exercise model in working project (YOLO-Fastest is small) */
+/* Tensor arena - 512KB for YOLOv8n mouth model */
 static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 
 	
@@ -213,7 +213,7 @@ static void DrawMouthDetections(
 
 static int32_t PrepareModelToHyperRAM(void)
 {
-#define MODEL_FILE "0:\\yolo-fastest-1.1-int8_vela.tflite"
+#define MODEL_FILE "0:\\best_full_integer_quant_vela.tflite"
 #define EACH_READ_SIZE 512
 	
     TCHAR sd_path[] = { '0', ':', 0 };    /* SD drive started from 0 */	
@@ -378,25 +378,11 @@ int main()
 
     arm::app::QuantParams inQuantParams = arm::app::GetTensorQuantParams(inputTensor);
 
-    /* Mouth detection post-processing (YOLO-Fastest style) */
+    /* Mouth detection post-processing (YOLOv8n DFL, 6 outputs) */
     static std::vector<arm::app::face_detection::DetectionResult> s_postProcessResults;
-    arm::app::face_detection::PostProcessParams postParams = {
-        .inputImgRows = inputImgRows,
-        .inputImgCols = inputImgCols,
-        .originalImageRows = 0,  /* set per frame */
-        .originalImageCols = 0,
-        .anchor1 = mouth_anchor1,
-        .anchor2 = mouth_anchor2,
-        .threshold = MOUTH_DETECTION_THRESHOLD,
-        .nms = MOUTH_NMS_THRESHOLD,
-        .numClasses = 2,
-        .topN = 0
-    };
-    arm::app::FaceDetectorPostProcess postProcess(
-        model.GetOutputTensor(0),
-        model.GetOutputTensor(1),
-        s_postProcessResults,
-        postParams);
+    arm::app::mouth_detection::MouthYOLOv8PostProcessing postProcess(&model,
+        MOUTH_DETECTION_THRESHOLD,
+        MOUTH_NMS_THRESHOLD);
 	
     //display framebuffer
     image_t frameBuffer;
@@ -522,14 +508,12 @@ int main()
 
         if (infFramebuf)
         {
-			/* Post process - set original image size for this frame */
-			postParams.originalImageRows = infFramebuf->frameImage.h;
-			postParams.originalImageCols = infFramebuf->frameImage.w;
-
-#if defined(__PROFILE__)
+	#if defined(__PROFILE__)
 			u64StartCycle = pmu_get_systick_Count();
 #endif
-			postProcess.RunPostProcess(infFramebuf->results);
+			postProcess.RunPostProcessing(inputImgRows, inputImgCols,
+				infFramebuf->frameImage.h, infFramebuf->frameImage.w,
+				infFramebuf->results);
 
 #if defined(__PROFILE__)
 			u64EndCycle = pmu_get_systick_Count();

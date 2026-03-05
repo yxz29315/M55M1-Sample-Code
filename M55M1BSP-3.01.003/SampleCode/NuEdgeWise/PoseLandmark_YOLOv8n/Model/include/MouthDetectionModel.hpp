@@ -1,9 +1,9 @@
 /**************************************************************************//**
  * @file     MouthDetectionModel.hpp
  * @version  V1.00
- * @brief    Mouth detection model (YOLO-Fastest v1.1) header file.
+ * @brief    Mouth detection model (YOLOv8n ReLU6) header file.
  *           Input: 192x192 RGB, int8 = uint8 - 128
- *           Output: 2 tensors (stride 32: 6x6, stride 16: 12x12)
+ *           Output: 6 tensors (box P3/P4/P5, cls P3/P4/P5), DFL reg_max=16
  *           Classes: 0 = mouth closed, 1 = mouth open
  *
  * @copyright SPDX-License-Identifier: Apache-2.0
@@ -13,10 +13,6 @@
 #define MOUTH_DETECTION_MODEL_HPP
 
 #include "Model.hpp"
-
-/* YOLO-Fastest v1.1 mouth anchors */
-extern const float mouth_anchor1[];
-extern const float mouth_anchor2[];
 
 namespace arm
 {
@@ -36,7 +32,7 @@ protected:
     bool EnlistOperations() override;
 
 private:
-    static constexpr int ms_maxOpCnt = 10;  /* Same as YoloFastest: Conv2D, DepthwiseConv2D, Add, Resize, Pad, MaxPool, Concat, Transpose, Ethos-U + margin */
+    static constexpr int ms_maxOpCnt = 2;  /* YOLOv8n: Transpose + Ethos-U */
     tflite::MicroMutableOpResolver<ms_maxOpCnt> m_opResolver;
 };
 
