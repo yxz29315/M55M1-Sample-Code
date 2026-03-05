@@ -475,18 +475,8 @@ int main()
 #if defined(__PROFILE__)
             u64StartCycle = pmu_get_systick_Count();
 #endif
-			// Swap RGB->BGR if model was trained on OpenCV/BGR (common for Ultralytics)
-			{
-				uint8_t *p = static_cast<uint8_t *>(inputTensor->data.data);
-				const size_t numPixels = inputImgCols * inputImgRows;
-				for (size_t i = 0; i < numPixels; i++)
-				{
-					uint8_t t = p[i * 3 + 0];
-					p[i * 3 + 0] = p[i * 3 + 2];
-					p[i * 3 + 2] = t;
-				}
-			}
-			// Quantize: int8 = uint8 - 128
+			/* Model spec: RGB, [0,255]→int8. No BGR swap (spec says RGB). */
+			/* Match PREPROCESSING_SPEC.md from trainer if confidence stays low. */
 			auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
 			auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
 			for (size_t i = 0; i < inputTensor->bytes; i++)
