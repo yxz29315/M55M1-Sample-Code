@@ -44,7 +44,7 @@
 /* Same as working project: 0x82400000 (exercise model works at this addr) */
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
-#define MOUTH_DETECTION_THRESHOLD  				(0.5f)
+#define MOUTH_DETECTION_THRESHOLD  				(0.25f)  /* lower = more detections, raise if too many false positives */
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
 
 typedef enum
