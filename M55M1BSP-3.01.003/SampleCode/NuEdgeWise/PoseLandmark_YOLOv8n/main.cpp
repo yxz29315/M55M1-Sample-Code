@@ -115,7 +115,7 @@ static S_FRAMEBUF *get_inf_framebuf()
     return NULL;
 }
 
-#define IMAGE_DISP_UPSCALE_FACTOR 1
+#define IMAGE_DISP_UPSCALE_FACTOR 2
 #if defined(LT7381_LCD_PANEL)
 #define FONT_DISP_UPSCALE_FACTOR 2
 #else
