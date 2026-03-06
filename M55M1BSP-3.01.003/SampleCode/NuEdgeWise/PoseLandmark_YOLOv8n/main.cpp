@@ -7,15 +7,21 @@
  * @copyright Copyright (C) 2023 Nuvoton Technology Corp. All rights reserved.
  ******************************************************************************/
 
-#include "BoardInit.hpp"      /* Board initialisation */
-#include "log_macros.h"      /* Logging macros (optional) */
+#include <cstdint>
+#include <cstddef>
+#include <vector>
+#include <cstring>
+#include <cstdio>
 
-#include "BufAttributes.hpp" /* Buffer attributes to be applied */
+#include "BoardInit.hpp"      /* Board initialisation */
+#include "log_macros.h"       /* Logging macros (optional) */
+
+#include "BufAttributes.hpp"  /* Buffer attributes to be applied */
 #include "MouthDetectionModel.hpp"
 #include "MouthYOLOv8PostProcessing.hpp"
 #include "FaceDetectionResult.hpp"
 
-#include "imlib.h"          /* Image processing */
+#include "imlib.h"            /* Image processing */
 #include "framebuffer.h"
 #include "ModelFileReader.h"
 #include "ff.h"
@@ -41,11 +47,11 @@
 
 #define NUM_FRAMEBUF 2  //1 or 2
 
-/* Same as working project: 0x82400000 (exercise model works at this addr) */
+/* HyperRAM model address */
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
-#define MOUTH_DETECTION_THRESHOLD  				(0.1f)   /* very low for debugging - check UART for maxConf */
-#define MOUTH_NMS_THRESHOLD  					(0.45f)
+#define MOUTH_DETECTION_THRESHOLD   (0.1f)   /* low for debugging */
+#define MOUTH_NMS_THRESHOLD         (0.45f)
 
 typedef enum
 {
@@ -61,57 +67,45 @@ typedef struct
     std::vector<arm::app::face_detection::DetectionResult> results;
 } S_FRAMEBUF;
 
-
 S_FRAMEBUF s_asFramebuf[NUM_FRAMEBUF];
 
 namespace arm
 {
 namespace app
 {
-/* Tensor arena - 512KB for YOLOv8n mouth model */
+/* Tensor arena */
 static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
-
-	
 } /* namespace app */
 } /* namespace arm */
 
-//frame buffer managemnet function
+// frame buffer management
 static S_FRAMEBUF *get_empty_framebuf()
 {
-    int i;
-
-    for (i = 0; i < NUM_FRAMEBUF; i ++)
+    for (int i = 0; i < NUM_FRAMEBUF; i++)
     {
         if (s_asFramebuf[i].eState == eFRAMEBUF_EMPTY)
             return &s_asFramebuf[i];
     }
-
     return NULL;
 }
 
 static S_FRAMEBUF *get_full_framebuf()
 {
-    int i;
-
-    for (i = 0; i < NUM_FRAMEBUF; i ++)
+    for (int i = 0; i < NUM_FRAMEBUF; i++)
     {
         if (s_asFramebuf[i].eState == eFRAMEBUF_FULL)
             return &s_asFramebuf[i];
     }
-
     return NULL;
 }
 
 static S_FRAMEBUF *get_inf_framebuf()
 {
-    int i;
-
-    for (i = 0; i < NUM_FRAMEBUF; i ++)
+    for (int i = 0; i < NUM_FRAMEBUF; i++)
     {
         if (s_asFramebuf[i].eState == eFRAMEBUF_INF)
             return &s_asFramebuf[i];
     }
-
     return NULL;
 }
 
@@ -126,27 +120,27 @@ static S_FRAMEBUF *get_inf_framebuf()
 //Used by omv library
 #if defined(__USE_UVC__)
 //UVC only support QVGA, QQVGA
-#define GLCD_WIDTH	320
-#define GLCD_HEIGHT	240
+#define GLCD_WIDTH   320
+#define GLCD_HEIGHT  240
 #else
-#define GLCD_WIDTH	320 //256
-#define GLCD_HEIGHT	240 //256
+#define GLCD_WIDTH   320
+#define GLCD_HEIGHT  240
 #endif
 
 //RGB565
-#define IMAGE_FB_SIZE	(GLCD_WIDTH * GLCD_HEIGHT * 2)
+#define IMAGE_FB_SIZE    (GLCD_WIDTH * GLCD_HEIGHT * 2)
 
 #undef OMV_FB_SIZE
 #define OMV_FB_SIZE (IMAGE_FB_SIZE + 1024)
 
 #undef OMV_FB_ALLOC_SIZE
-#define OMV_FB_ALLOC_SIZE	(1*1024)
+#define OMV_FB_ALLOC_SIZE (1 * 1024)
 
 __attribute__((section(".bss.vram.data"), aligned(32))) static char fb_array[OMV_FB_SIZE + OMV_FB_ALLOC_SIZE];
 __attribute__((section(".bss.vram.data"), aligned(32))) static char jpeg_array[OMV_JPEG_BUF_SIZE];
 
 #if (NUM_FRAMEBUF == 2)
-    __attribute__((section(".bss.vram.data"), aligned(32))) static char frame_buf1[OMV_FB_SIZE];
+__attribute__((section(".bss.vram.data"), aligned(32))) static char frame_buf1[OMV_FB_SIZE];
 #endif
 
 char *_fb_base = NULL;
@@ -157,8 +151,6 @@ char *_fballoc = NULL;
 static void omv_init()
 {
     image_t frameBuffer;
-    int i;
-
     frameBuffer.w = GLCD_WIDTH;
     frameBuffer.h = GLCD_HEIGHT;
     frameBuffer.size = GLCD_WIDTH * GLCD_HEIGHT * 2;
@@ -174,7 +166,7 @@ static void omv_init()
     framebuffer_init0();
     framebuffer_init_from_image(&frameBuffer);
 
-    for (i = 0 ; i < NUM_FRAMEBUF; i++)
+    for (int i = 0; i < NUM_FRAMEBUF; i++)
     {
         s_asFramebuf[i].eState = eFRAMEBUF_EMPTY;
     }
@@ -197,151 +189,132 @@ static void DrawMouthDetections(
     image_t *drawImg
 )
 {
-	int boxColor = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);
-	int labelY;
+    int boxColor = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);
+    int labelY;
 
-	for (size_t i = 0; i < results.size(); i++)
-	{
-		const auto &r = results[i];
-		imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, boxColor, 2, false);
+    for (size_t i = 0; i < results.size(); i++)
+    {
+        const auto &r = results[i];
+        imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, boxColor, 2, false);
 
-		labelY = (r.m_y0 - 14 > 0) ? (r.m_y0 - 14) : r.m_y0;
-		imlib_draw_string(drawImg, r.m_x0, labelY, MOUTH_LABELS[r.m_classId], COLOR_B5_MAX, 2, 0, 0, false,
-		                  false, false, false, 0, false, false);
-	}
+        labelY = (r.m_y0 - 14 > 0) ? (r.m_y0 - 14) : r.m_y0;
+        imlib_draw_string(drawImg, r.m_x0, labelY, MOUTH_LABELS[r.m_classId],
+                          COLOR_B5_MAX, 2, 0, 0, false, false, false, false, 0, false, false);
+    }
 }
 
 static int32_t PrepareModelToHyperRAM(void)
 {
 #define MODEL_FILE "0:\\best_full_integer_quant_vela.tflite"
 #define EACH_READ_SIZE 512
-	
-    TCHAR sd_path[] = { '0', ':', 0 };    /* SD drive started from 0 */	
-    f_chdrive(sd_path);          /* set default path */
 
-	int32_t i32FileSize;
-	int32_t i32FileReadIndex = 0;
-	int32_t i32Read;
-	
-	if(!ModelFileReader_Initialize(MODEL_FILE))
-	{
-        printf_err("Unable open model %s\n", MODEL_FILE);		
-		return -1;
-	}
-	
-	i32FileSize = ModelFileReader_FileSize();
+    TCHAR sd_path[] = { '0', ':', 0 };    /* SD drive started from 0 */
+    f_chdrive(sd_path);                  /* set default path */
+
+    int32_t i32FileSize;
+    int32_t i32FileReadIndex = 0;
+    int32_t i32Read;
+
+    if (!ModelFileReader_Initialize(MODEL_FILE))
+    {
+        printf_err("Unable open model %s\n", MODEL_FILE);
+        return -1;
+    }
+
+    i32FileSize = ModelFileReader_FileSize();
     info("Model file size %i \n", i32FileSize);
 
-	while(i32FileReadIndex < i32FileSize)
-	{
-		i32Read = ModelFileReader_ReadData((BYTE *)(MODEL_AT_HYPERRAM_ADDR + i32FileReadIndex), EACH_READ_SIZE);
-		if(i32Read < 0)
-			break;
-		i32FileReadIndex += i32Read;
-	}
-	
-	if(i32FileReadIndex < i32FileSize)
-	{
-        printf_err("Read Model file size is not enough\n");		
-		return -2;
-	}
-	
-#if 0
-	/* verify */
-	i32FileReadIndex = 0;
-	ModelFileReader_Rewind();
-	BYTE au8TempBuf[EACH_READ_SIZE];
-	
-	while(i32FileReadIndex < i32FileSize)
-	{
-		i32Read = ModelFileReader_ReadData((BYTE *)au8TempBuf, EACH_READ_SIZE);
-		if(i32Read < 0)
-			break;
-		
-		if(std::memcmp(au8TempBuf, (void *)(MODEL_AT_HYPERRAM_ADDR + i32FileReadIndex), i32Read)!= 0)
-		{
-			printf_err("verify the model file content is incorrect at %i \n", i32FileReadIndex);		
-			return -3;
-		}
-		i32FileReadIndex += i32Read;
-	}
-	
-#endif	
-	ModelFileReader_Finish();
-	
-	return i32FileSize;
-}	
+    while (i32FileReadIndex < i32FileSize)
+    {
+        i32Read = ModelFileReader_ReadData((BYTE *)(MODEL_AT_HYPERRAM_ADDR + i32FileReadIndex), EACH_READ_SIZE);
+        if (i32Read < 0)
+            break;
+        i32FileReadIndex += i32Read;
+    }
 
+    if (i32FileReadIndex < i32FileSize)
+    {
+        printf_err("Read Model file size is not enough\n");
+        ModelFileReader_Finish();
+        return -2;
+    }
+
+    ModelFileReader_Finish();
+    return i32FileSize;
+}
 
 int main()
 {
-    /* Initialise the UART module to allow printf related functions (if using retarget) */
     BoardInit();
     info("main: BoardInit done, loading model...\n");
 
-		// 1) Copy model to HyperRAM
-		int32_t i32ModelSize = PrepareModelToHyperRAM();
-		if (i32ModelSize <= 0) {
-				printf_err("Failed to prepare model\n");
-				return 1;
-		}
+    /* 1) Copy model to HyperRAM */
+    int32_t i32ModelSize = PrepareModelToHyperRAM();
+    if (i32ModelSize <= 0)
+    {
+        printf_err("Failed to prepare model\n");
+        return 1;
+    }
 
-		// 2) Compute model region end (inclusive), aligned to 32B
-		const uint32_t modelBase = MODEL_AT_HYPERRAM_ADDR;
-		const uint32_t modelEnd  = modelBase + (uint32_t)i32ModelSize;          // end-exclusive
-		const uint32_t modelLimit = ((modelEnd + 31u) & ~31u) - 1u;             // end-inclusive, 32B aligned
+    /* 2) Compute model region end and flush cache for the written range */
+    const uint32_t modelBase  = (uint32_t)MODEL_AT_HYPERRAM_ADDR;
+    const uint32_t modelEnd   = modelBase + (uint32_t)i32ModelSize;           // end-exclusive
+    const uint32_t modelLimit = ((modelEnd + 31u) & ~31u) - 1u;               // end-inclusive (32B aligned)
 
-		// 3) Clean D-cache for the area we just wrote (important if it was cacheable)
-		const uint32_t cleanAddr = modelBase & ~31u;
-		const uint32_t cleanLen  = (modelEnd - cleanAddr + 31u) & ~31u;
-		SCB_CleanDCache_by_Addr((uint32_t*)cleanAddr, (int32_t)cleanLen);
-		__DSB(); __ISB();
+    const uint32_t cleanAddr = modelBase & ~31u;                              // align down
+    const uint32_t cleanLen  = (modelEnd - cleanAddr + 31u) & ~31u;           // align length up
+    SCB_CleanDCache_by_Addr((uint32_t *)cleanAddr, (int32_t)cleanLen);
+    __DSB();
+    __ISB();
 
-		// 4) Build MPU config INCLUDING a model region that covers the full model
-		info("Set tensor arena cache policy to WTRA\n");
-		std::vector<ARM_MPU_Region_t> mpuConfig =
-		{
-				{
-						// Tensor arena (WTRA)
-						ARM_MPU_RBAR((uint32_t)arm::app::tensorArena, ARM_MPU_SH_NON, 0, 1, 1),
-						ARM_MPU_RLAR(((uint32_t)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1u,
-												 eMPU_ATTR_CACHEABLE_WTRA)
-				},
-				{
-						// Model in HyperRAM (NON-CACHEABLE) — NOW SIZED TO i32ModelSize
-						ARM_MPU_RBAR(modelBase, ARM_MPU_SH_NON, 0, 1, 1),
-						ARM_MPU_RLAR(modelLimit, eMPU_ATTR_NON_CACHEABLE)
-				},
-				{
-						// fb_array non-cacheable (CCAP DMA)
-						ARM_MPU_RBAR((uint32_t)fb_array, ARM_MPU_SH_NON, 0, 1, 1),
-						ARM_MPU_RLAR(((uint32_t)fb_array) + OMV_FB_SIZE - 1u,
-												 eMPU_ATTR_NON_CACHEABLE)
-				},
-		#if (NUM_FRAMEBUF == 2)
-				{
-						ARM_MPU_RBAR((uint32_t)frame_buf1, ARM_MPU_SH_NON, 0, 1, 1),
-						ARM_MPU_RLAR(((uint32_t)frame_buf1) + OMV_FB_SIZE - 1u,
-												 eMPU_ATTR_NON_CACHEABLE)
-				},
-		#endif
-		};
+    info("Model HyperRAM region: 0x%08x - 0x%08x (size=%d)\n",
+         modelBase, modelLimit, (int)i32ModelSize);
 
-		InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
+    /* 3) MPU config: tensor arena WTRA, model non-cacheable (FULL size), CCAP buffers non-cacheable */
+    info("Set tensor arena cache policy to WTRA\n");
+    std::vector<ARM_MPU_Region_t> mpuConfig =
+    {
+        {
+            // Tensor arena (WTRA)
+            ARM_MPU_RBAR((uint32_t)arm::app::tensorArena, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(((uint32_t)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1u,
+                         eMPU_ATTR_CACHEABLE_WTRA)
+        },
+        {
+            // Model in HyperRAM (NON-CACHEABLE) — covers full model size
+            ARM_MPU_RBAR(modelBase, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(modelLimit, eMPU_ATTR_NON_CACHEABLE)
+        },
+        {
+            // fb_array non-cacheable (CCAP DMA) — cover full allocated block
+            ARM_MPU_RBAR((uint32_t)fb_array, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(((uint32_t)fb_array) + (OMV_FB_SIZE + OMV_FB_ALLOC_SIZE) - 1u,
+                         eMPU_ATTR_NON_CACHEABLE)
+        },
+#if (NUM_FRAMEBUF == 2)
+        {
+            ARM_MPU_RBAR((uint32_t)frame_buf1, ARM_MPU_SH_NON, 0, 1, 1),
+            ARM_MPU_RLAR(((uint32_t)frame_buf1) + OMV_FB_SIZE - 1u,
+                         eMPU_ATTR_NON_CACHEABLE)
+        },
+#endif
+    };
 
-		// 5) Now init model
-		arm::app::MouthDetectionModel model;
-		if (!model.Init(arm::app::tensorArena,
-										sizeof(arm::app::tensorArena),
-										(unsigned char*)MODEL_AT_HYPERRAM_ADDR,
-										i32ModelSize))
-		{
-				printf_err("Failed to initialise model\n");
-				return 1;
-		}
-		info("Model init OK\n");
+    InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
 
-    TfLiteTensor *inputTensor   = model.GetInputTensor(0);
+    /* 4) Init model */
+    arm::app::MouthDetectionModel model;
+    if (!model.Init(arm::app::tensorArena,
+                    sizeof(arm::app::tensorArena),
+                    (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
+                    i32ModelSize))
+    {
+        printf_err("Failed to initialise model\n");
+        return 1;
+    }
+    info("Model init OK\n");
+
+    TfLiteTensor *inputTensor = model.GetInputTensor(0);
 
     if (!inputTensor->dims)
     {
@@ -359,25 +332,26 @@ int main()
     const int inputImgCols = inputShape->data[arm::app::MouthDetectionModel::ms_inputColsIdx];
     const int inputImgRows = inputShape->data[arm::app::MouthDetectionModel::ms_inputRowsIdx];
     const uint32_t nChannels = inputShape->data[arm::app::MouthDetectionModel::ms_inputChannelsIdx];
+    (void)nChannels;
 
     arm::app::QuantParams inQuantParams = arm::app::GetTensorQuantParams(inputTensor);
+    (void)inQuantParams;
 
-    /* Mouth detection post-processing (YOLOv8n DFL, 6 outputs) */
-    static std::vector<arm::app::face_detection::DetectionResult> s_postProcessResults;
-    arm::app::mouth_detection::MouthYOLOv8PostProcessing postProcess(&model,
+    /* Mouth detection post-processing (YOLOv8n DFL, outputs handled in MouthYOLOv8PostProcessing) */
+    arm::app::mouth_detection::MouthYOLOv8PostProcessing postProcess(
+        &model,
         MOUTH_DETECTION_THRESHOLD,
         MOUTH_NMS_THRESHOLD);
-	
-    //display framebuffer
+
+    // display framebuffer
     image_t frameBuffer;
     rectangle_t roi;
 
-    //omv library init
+    // omv library init
     omv_init();
     framebuffer_init_image(&frameBuffer);
 
 #if defined(__PROFILE__)
-
     arm::app::Profiler profiler;
     uint64_t u64StartCycle;
     uint64_t u64EndCycle;
@@ -398,7 +372,7 @@ int main()
     S_FRAMEBUF *fullFramebuf;
     S_FRAMEBUF *emptyFramebuf;
 
-    //Setup image senosr
+    // Setup image sensor
     ImageSensor_Init();
     ImageSensor_Config(eIMAGE_FMT_RGB565, frameBuffer.w, frameBuffer.h, true);
 
@@ -411,7 +385,7 @@ int main()
 #endif
 
 #if defined (__USE_UVC__)
-	UVC_Init();
+    UVC_Init();
     HSUSBD_Start();
 #endif
 
@@ -421,19 +395,17 @@ int main()
 
         if (emptyFramebuf)
         {
-            //capture frame from CCAP
 #if defined(__PROFILE__)
             u64CCAPStartCycle = pmu_get_systick_Count();
 #endif
-
             ImageSensor_TriggerCapture((uint32_t)(emptyFramebuf->frameImage.data));
-		}
-		
+        }
+
         fullFramebuf = get_full_framebuf();
 
         if (fullFramebuf)
         {
-            //resize full image to input tensor
+            // resize full image to input tensor
             image_t resizeImg;
 
             roi.x = 0;
@@ -443,7 +415,7 @@ int main()
 
             resizeImg.w = inputImgCols;
             resizeImg.h = inputImgRows;
-            resizeImg.data = (uint8_t *)inputTensor->data.data; //direct resize to input tensor buffer
+            resizeImg.data = (uint8_t *)inputTensor->data.data; // direct resize to input tensor buffer
             resizeImg.pixfmt = PIXFORMAT_RGB888;
 
 #if defined(__PROFILE__)
@@ -459,24 +431,26 @@ int main()
 #if defined(__PROFILE__)
             u64StartCycle = pmu_get_systick_Count();
 #endif
-			// Swap RGB->BGR if model was trained on OpenCV/BGR (common for Ultralytics)
-			{
-				uint8_t *p = static_cast<uint8_t *>(inputTensor->data.data);
-				const size_t numPixels = inputImgCols * inputImgRows;
-				for (size_t i = 0; i < numPixels; i++)
-				{
-					uint8_t t = p[i * 3 + 0];
-					p[i * 3 + 0] = p[i * 3 + 2];
-					p[i * 3 + 2] = t;
-				}
-			}
-			// Quantize: int8 = uint8 - 128
-			auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
-			auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
-			for (size_t i = 0; i < inputTensor->bytes; i++)
-			{
-				signed_req_data[i] = static_cast<int8_t>(req_data[i]) - 128;
-			}
+
+            // Swap RGB->BGR if model was trained on OpenCV/BGR (optional; comment out to test)
+            {
+                uint8_t *p = static_cast<uint8_t *>(inputTensor->data.data);
+                const size_t numPixels = (size_t)inputImgCols * (size_t)inputImgRows;
+                for (size_t i = 0; i < numPixels; i++)
+                {
+                    uint8_t t = p[i * 3 + 0];
+                    p[i * 3 + 0] = p[i * 3 + 2];
+                    p[i * 3 + 2] = t;
+                }
+            }
+
+            // Quantize: int8 = uint8 - 128
+            auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
+            auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
+            for (size_t i = 0; i < (size_t)inputTensor->bytes; i++)
+            {
+                signed_req_data[i] = static_cast<int8_t>(req_data[i]) - 128;
+            }
 
 #if defined(__PROFILE__)
             u64EndCycle = pmu_get_systick_Count();
@@ -484,54 +458,53 @@ int main()
 #endif
 
 #if defined(__PROFILE__)
-			profiler.StartProfiling("Inference");
+            profiler.StartProfiling("Inference");
 #endif
 
-			model.RunInference();
+            model.RunInference();
 
 #if defined(__PROFILE__)
-			profiler.StopProfiling();
-			profiler.PrintProfilingResult();
+            profiler.StopProfiling();
+            profiler.PrintProfilingResult();
 #endif
 
             fullFramebuf->eState = eFRAMEBUF_INF;
         }
+
         infFramebuf = get_inf_framebuf();
 
         if (infFramebuf)
         {
-	#if defined(__PROFILE__)
-			u64StartCycle = pmu_get_systick_Count();
+#if defined(__PROFILE__)
+            u64StartCycle = pmu_get_systick_Count();
 #endif
-			postProcess.RunPostProcessing(inputImgRows, inputImgCols,
-				infFramebuf->frameImage.h, infFramebuf->frameImage.w,
-				infFramebuf->results);
+            postProcess.RunPostProcessing(inputImgRows, inputImgCols,
+                                          infFramebuf->frameImage.h, infFramebuf->frameImage.w,
+                                          infFramebuf->results);
 
 #if defined(__PROFILE__)
-			u64EndCycle = pmu_get_systick_Count();
-			info("post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
+            u64EndCycle = pmu_get_systick_Count();
+            info("post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
 #endif
 
-            /* Draw mouth detection boxes and labels */
-			if (infFramebuf->results.size())
-			{
+            if (infFramebuf->results.size())
+            {
 #if defined(__PROFILE__)
-				u64StartCycle = pmu_get_systick_Count();
+                u64StartCycle = pmu_get_systick_Count();
 #endif
-				DrawMouthDetections(infFramebuf->results, &infFramebuf->frameImage);
-#if defined(__PROFILE__)
-				u64EndCycle = pmu_get_systick_Count();
-				info("draw mouth detections cycles %llu \n", (u64EndCycle - u64StartCycle));
-#endif
-			}
+                DrawMouthDetections(infFramebuf->results, &infFramebuf->frameImage);
 
-            //display result image
+#if defined(__PROFILE__)
+                u64EndCycle = pmu_get_systick_Count();
+                info("draw mouth detections cycles %llu \n", (u64EndCycle - u64StartCycle));
+#endif
+            }
+
 #if defined (__USE_DISPLAY__)
-            //Display image on LCD
             sDispRect.u32TopLeftX = 0;
             sDispRect.u32TopLeftY = 0;
-			sDispRect.u32BottonRightX = ((frameBuffer.w * IMAGE_DISP_UPSCALE_FACTOR) - 1);
-			sDispRect.u32BottonRightY = ((frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR) - 1);
+            sDispRect.u32BottonRightX = ((frameBuffer.w * IMAGE_DISP_UPSCALE_FACTOR) - 1);
+            sDispRect.u32BottonRightY = ((frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR) - 1);
 
 #if defined(__PROFILE__)
             u64StartCycle = pmu_get_systick_Count();
@@ -543,99 +516,85 @@ int main()
             u64EndCycle = pmu_get_systick_Count();
             info("display image cycles %llu \n", (u64EndCycle - u64StartCycle));
 #endif
-
 #endif
 
 #if defined (__USE_UVC__)
-			if(UVC_IsConnect())
-			{
+            if (UVC_IsConnect())
+            {
 #if (UVC_Color_Format == UVC_Format_YUY2)
-				image_t RGB565Img;
-				image_t YUV422Img;
+                image_t RGB565Img;
+                image_t YUV422Img;
 
-				RGB565Img.w = infFramebuf->frameImage.w;
-				RGB565Img.h = infFramebuf->frameImage.h;
-				RGB565Img.data = (uint8_t *)infFramebuf->frameImage.data;
-				RGB565Img.pixfmt = PIXFORMAT_RGB565;
+                RGB565Img.w = infFramebuf->frameImage.w;
+                RGB565Img.h = infFramebuf->frameImage.h;
+                RGB565Img.data = (uint8_t *)infFramebuf->frameImage.data;
+                RGB565Img.pixfmt = PIXFORMAT_RGB565;
 
-				YUV422Img.w = RGB565Img.w;
-				YUV422Img.h = RGB565Img.h;
-				YUV422Img.data = (uint8_t *)infFramebuf->frameImage.data;
-				YUV422Img.pixfmt = PIXFORMAT_YUV422;
-				
-				roi.x = 0;
-				roi.y = 0;
-				roi.w = RGB565Img.w;
-				roi.h = RGB565Img.h;
-				imlib_nvt_scale(&RGB565Img, &YUV422Img, &roi);
-				
+                YUV422Img.w = RGB565Img.w;
+                YUV422Img.h = RGB565Img.h;
+                YUV422Img.data = (uint8_t *)infFramebuf->frameImage.data;
+                YUV422Img.pixfmt = PIXFORMAT_YUV422;
+
+                roi.x = 0;
+                roi.y = 0;
+                roi.w = RGB565Img.w;
+                roi.h = RGB565Img.h;
+                imlib_nvt_scale(&RGB565Img, &YUV422Img, &roi);
 #else
-				image_t origImg;
-				image_t vflipImg;
+                image_t origImg;
+                image_t vflipImg;
 
-				origImg.w = infFramebuf->frameImage.w;
-				origImg.h = infFramebuf->frameImage.h;
-				origImg.data = (uint8_t *)infFramebuf->frameImage.data;
-				origImg.pixfmt = PIXFORMAT_RGB565;
+                origImg.w = infFramebuf->frameImage.w;
+                origImg.h = infFramebuf->frameImage.h;
+                origImg.data = (uint8_t *)infFramebuf->frameImage.data;
+                origImg.pixfmt = PIXFORMAT_RGB565;
 
-				vflipImg.w = origImg.w;
-				vflipImg.h = origImg.h;
-				vflipImg.data = (uint8_t *)infFramebuf->frameImage.data;
-				vflipImg.pixfmt = PIXFORMAT_RGB565;
+                vflipImg.w = origImg.w;
+                vflipImg.h = origImg.h;
+                vflipImg.data = (uint8_t *)infFramebuf->frameImage.data;
+                vflipImg.pixfmt = PIXFORMAT_RGB565;
 
-				imlib_nvt_vflip(&origImg, &vflipImg);
+                imlib_nvt_vflip(&origImg, &vflipImg);
 #endif
-				UVC_SendImage((uint32_t)infFramebuf->frameImage.data, IMAGE_FB_SIZE, uvcStatus.StillImage);				
-
-			}
-
+                UVC_SendImage((uint32_t)infFramebuf->frameImage.data, IMAGE_FB_SIZE, uvcStatus.StillImage);
+            }
 #endif
 
-            u64PerfFrames ++;
-			if ((uint64_t) pmu_get_systick_Count() > u64PerfCycle)
+            u64PerfFrames++;
+            if ((uint64_t)pmu_get_systick_Count() > u64PerfCycle)
             {
                 info("Total inference rate: %llu\n", u64PerfFrames / EACH_PERF_SEC);
 #if defined (__USE_DISPLAY__)
                 sprintf(szDisplayText, "Frame Rate %llu", u64PerfFrames / EACH_PERF_SEC);
-                //sprintf(szDisplayText,"Time %llu",(uint64_t) pmu_get_systick_Count() / (uint64_t)SystemCoreClock);
-                //info("Running %s sec \n", szDisplayText);
 
                 sDispRect.u32TopLeftX = 0;
-				sDispRect.u32TopLeftY = frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR;
-				sDispRect.u32BottonRightX = (frameBuffer.w);
-				sDispRect.u32BottonRightY = ((frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR) + (FONT_DISP_UPSCALE_FACTOR * FONT_HTIGHT) - 1);
+                sDispRect.u32TopLeftY = frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR;
+                sDispRect.u32BottonRightX = (frameBuffer.w);
+                sDispRect.u32BottonRightY = ((frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR) +
+                                             (FONT_DISP_UPSCALE_FACTOR * FONT_HTIGHT) - 1);
 
                 Display_ClearRect(C_WHITE, &sDispRect);
-                Display_PutText(
-                    szDisplayText,
-                    strlen(szDisplayText),
-                    0,
-					frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR,
-                    C_BLUE,
-                    C_WHITE,
-                    false,
-					FONT_DISP_UPSCALE_FACTOR
-                );
+                Display_PutText(szDisplayText, strlen(szDisplayText),
+                                0, frameBuffer.h * IMAGE_DISP_UPSCALE_FACTOR,
+                                C_BLUE, C_WHITE, false, FONT_DISP_UPSCALE_FACTOR);
 #endif
                 u64PerfCycle = (uint64_t)pmu_get_systick_Count() + (uint64_t)(SystemCoreClock * EACH_PERF_SEC);
                 u64PerfFrames = 0;
-			}
+            }
 
             infFramebuf->eState = eFRAMEBUF_EMPTY;
-		}
+        }
 
-		//Wait CCAP ready
-		if (emptyFramebuf)
-		{
-			//Capture new image
-
-			ImageSensor_WaitCaptureDone();
+        // Wait CCAP ready
+        if (emptyFramebuf)
+        {
+            ImageSensor_WaitCaptureDone();
 #if defined(__PROFILE__)
-			u64CCAPEndCycle = pmu_get_systick_Count();
-			info("ccap capture cycles %llu \n", (u64CCAPEndCycle - u64CCAPStartCycle));
+            u64CCAPEndCycle = pmu_get_systick_Count();
+            info("ccap capture cycles %llu \n", (u64CCAPEndCycle - u64CCAPStartCycle));
 #endif
-            emptyFramebuf->eState = eFRAMEBUF_FULL;		
-		}
+            emptyFramebuf->eState = eFRAMEBUF_FULL;
+        }
     }
 
     return 0;
