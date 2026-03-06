@@ -475,13 +475,13 @@ int main()
 #if defined(__PROFILE__)
             u64StartCycle = pmu_get_systick_Count();
 #endif
-			/* Model spec: RGB, [0,255]→int8. No BGR swap (spec says RGB). */
-			/* Match PREPROCESSING_SPEC.md from trainer if confidence stays low. */
+			/* Model spec: uint8 [0,255] → int8 = uint8 - 128. Use int32 to avoid UB. */
 			auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
 			auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
 			for (size_t i = 0; i < inputTensor->bytes; i++)
 			{
-				signed_req_data[i] = static_cast<int8_t>(req_data[i]) - 128;
+				int32_t v = static_cast<int32_t>(req_data[i]) - 128;
+				signed_req_data[i] = static_cast<int8_t>(v);
 			}
 
 #if defined(__PROFILE__)
