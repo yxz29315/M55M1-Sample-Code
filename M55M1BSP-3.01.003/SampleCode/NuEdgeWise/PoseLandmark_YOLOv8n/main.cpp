@@ -13,6 +13,8 @@
 #include "BufAttributes.hpp" /* Buffer attributes to be applied */
 #include "MouthDetectionModel.hpp"
 #include "MouthYOLOv8PostProcessing.hpp"
+#include "FaceDetectionModel.hpp"
+#include "FaceDetectorPostProcessing.hpp"
 #include "FaceDetectionResult.hpp"
 
 #include "imlib.h"          /* Image processing */
@@ -44,8 +46,9 @@
 /* Same as working project: 0x82400000 (exercise model works at this addr) */
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
-#define MOUTH_DETECTION_THRESHOLD  				(0.1f)   /* very low for debugging - check UART for maxConf */
+#define MOUTH_DETECTION_THRESHOLD  				(0.25f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
+#define FACE_PRESENCE_THRESHOLD  				(0.4f)
 
 typedef enum
 {
@@ -58,7 +61,8 @@ typedef struct
 {
     E_FRAMEBUF_STATE eState;
     image_t frameImage;
-    std::vector<arm::app::face_detection::DetectionResult> results;
+    std::vector<arm::app::face_detection::DetectionResult> results_FD;  /* face boxes */
+    std::vector<arm::app::face_detection::DetectionResult> results;       /* mouth detections */
 } S_FRAMEBUF;
 
 
@@ -68,10 +72,10 @@ namespace arm
 {
 namespace app
 {
-/* Tensor arena - 512KB for YOLOv8n mouth model */
-static uint8_t tensorArena[ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
-
-	
+#define FACE_DETECTION_ACTIVATION_BUF_SZ (460000)
+#define MOUTH_ACTIVATION_BUF_SZ          (512 * 1024)
+static uint8_t tensorArena_FaceDetection[FACE_DETECTION_ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
+static uint8_t tensorArena_Mouth[MOUTH_ACTIVATION_BUF_SZ] ACTIVATION_BUF_ATTRIBUTE;
 } /* namespace app */
 } /* namespace arm */
 
@@ -192,6 +196,19 @@ static void omv_init()
 
 static const char *MOUTH_LABELS[] = { "mouth closed", "mouth open" };
 
+static void DrawFaceBoxes(
+    const std::vector<arm::app::face_detection::DetectionResult> &results,
+    image_t *drawImg
+)
+{
+    int faceColor = COLOR_R5_G6_B5_TO_RGB565(COLOR_R5_MAX, 0, 0);
+    for (size_t i = 0; i < results.size(); i++)
+    {
+        const auto &r = results[i];
+        imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, faceColor, 2, false);
+    }
+}
+
 static void DrawMouthDetections(
     const std::vector<arm::app::face_detection::DetectionResult> &results,
     image_t *drawImg
@@ -304,31 +321,52 @@ int main()
     }
     info("Model magic TFL3 OK, readable from HyperRAM\n");
 
-    /* Model init BEFORE MPU - matches working project (pose + exercise) */
-    arm::app::MouthDetectionModel model;
+    /* Face detection model (embedded) */
+    arm::app::FaceDetectionModel faceDetectionModel;
+    if (!faceDetectionModel.Init(arm::app::tensorArena_FaceDetection,
+                               sizeof(arm::app::tensorArena_FaceDetection),
+                               (unsigned char *)arm::app::face_detection::GetModelPointer(),
+                               arm::app::face_detection::GetModelLen()))
+    {
+        printf_err("Failed to initialise face detection model\n");
+        return 1;
+    }
+    info("Face detection model init OK\n");
 
-    if (!model.Init(arm::app::tensorArena,
-                    sizeof(arm::app::tensorArena),
+    /* Mouth model (from SD card) */
+    arm::app::MouthDetectionModel model;
+    if (!model.Init(arm::app::tensorArena_Mouth,
+                    sizeof(arm::app::tensorArena_Mouth),
                     (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
                     i32ModelSize))
     {
-        printf_err("Failed to initialise model\n");
+        printf_err("Failed to initialise mouth model\n");
         return 1;
     }
-    info("Model init OK\n");
+    info("Mouth model init OK\n");
 
-    /* Setup MPU for tensor arena AFTER model.Init() - same as working project */
+    /* Setup MPU for tensor arenas */
     info("Set tensor arena cache policy to WTRA\n");
     const std::vector<ARM_MPU_Region_t> mpuConfig =
     {
         {
-            // SRAM for tensor arena
-            ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
+            // SRAM for face detection tensor arena
+            ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena_FaceDetection),        // Base
                          ARM_MPU_SH_NON,    // Non-shareable
                          0,                 // Read-only
                          1,                 // Non-Privileged
                          1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
+            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena_FaceDetection) + FACE_DETECTION_ACTIVATION_BUF_SZ - 1),        // Limit
+                         eMPU_ATTR_CACHEABLE_WTRA)
+        },
+        {
+            // SRAM for mouth tensor arena
+            ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena_Mouth),        // Base
+                         ARM_MPU_SH_NON,    // Non-shareable
+                         0,                 // Read-only
+                         1,                 // Non-Privileged
+                         1),                // eXecute Never enabled
+            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena_Mouth) + MOUTH_ACTIVATION_BUF_SZ - 1),        // Limit
                          eMPU_ATTR_CACHEABLE_WTRA)
         },
         {
@@ -378,8 +416,28 @@ int main()
 
     arm::app::QuantParams inQuantParams = arm::app::GetTensorQuantParams(inputTensor);
 
+    /* Face detection: input 192x192 grayscale */
+    TfLiteIntArray *inputShape_FD = faceDetectionModel.GetInputShape(0);
+    const int inputImgCols_FD = inputShape_FD->data[arm::app::FaceDetectionModel::ms_inputColsIdx];
+    const int inputImgRows_FD = inputShape_FD->data[arm::app::FaceDetectionModel::ms_inputRowsIdx];
+    TfLiteTensor *outputTensor0_FD = faceDetectionModel.GetOutputTensor(0);
+    TfLiteTensor *outputTensor1_FD = faceDetectionModel.GetOutputTensor(1);
+    const arm::app::face_detection::PostProcessParams postProcessParams_FD{
+        inputImgRows_FD,
+        inputImgCols_FD,
+        GLCD_HEIGHT,
+        GLCD_WIDTH,
+        anchor1,
+        anchor2,
+        FACE_PRESENCE_THRESHOLD,
+        0.45f,
+        1,  /* numClasses */
+        0   /* topN */
+    };
+    arm::app::FaceDetectorPostProcess postProcess_FD(outputTensor0_FD, outputTensor1_FD,
+        s_asFramebuf[0].results_FD, postProcessParams_FD);
+
     /* Mouth detection post-processing (YOLOv8n DFL, 6 outputs) */
-    static std::vector<arm::app::face_detection::DetectionResult> s_postProcessResults;
     arm::app::mouth_detection::MouthYOLOv8PostProcessing postProcess(&model,
         MOUTH_DETECTION_THRESHOLD,
         MOUTH_NMS_THRESHOLD);
@@ -449,56 +507,93 @@ int main()
 
         if (fullFramebuf)
         {
-            //resize full image to input tensor
-            image_t resizeImg;
+            fullFramebuf->results_FD.clear();
+            fullFramebuf->results.clear();
 
+            /* --- Step 1: Face detection on full frame (192x192 grayscale) --- */
+            TfLiteTensor *inputTensor_FD = faceDetectionModel.GetInputTensor(0);
             roi.x = 0;
             roi.y = 0;
             roi.w = fullFramebuf->frameImage.w;
             roi.h = fullFramebuf->frameImage.h;
+            image_t resizeImg_FD;
+            resizeImg_FD.w = inputImgCols_FD;
+            resizeImg_FD.h = inputImgRows_FD;
+            resizeImg_FD.data = (uint8_t *)inputTensor_FD->data.data;
+            resizeImg_FD.pixfmt = PIXFORMAT_GRAYSCALE;
+            imlib_nvt_scale(&fullFramebuf->frameImage, &resizeImg_FD, &roi);
 
-            resizeImg.w = inputImgCols;
-            resizeImg.h = inputImgRows;
-            resizeImg.data = (uint8_t *)inputTensor->data.data; //direct resize to input tensor buffer
-            resizeImg.pixfmt = PIXFORMAT_RGB888;
+            auto *req_FD = static_cast<uint8_t *>(inputTensor_FD->data.data);
+            auto *signed_FD = static_cast<int8_t *>(inputTensor_FD->data.data);
+            for (size_t i = 0; i < inputTensor_FD->bytes; i++)
+            {
+                int32_t v = static_cast<int32_t>(req_FD[i]) - 128;
+                signed_FD[i] = static_cast<int8_t>(v);
+            }
+            faceDetectionModel.RunInference();
+            postProcess_FD.RunPostProcess(fullFramebuf->results_FD);
 
-#if defined(__PROFILE__)
-            u64StartCycle = pmu_get_systick_Count();
-#endif
-            imlib_nvt_scale(&fullFramebuf->frameImage, &resizeImg, &roi);
+            /* Expand face boxes 1.4x (like FaceLandmark) */
+            float scaleFactorH = 1.4f;
+            for (size_t i = 0; i < fullFramebuf->results_FD.size(); i++)
+            {
+                auto *fb = &fullFramebuf->results_FD[i];
+                float scaleW = scaleFactorH * fb->m_h;
+                float scaleH = scaleFactorH * fb->m_h;
+                int newX = fb->m_x0 - (int)((scaleW - fb->m_w) / 2);
+                int newY = fb->m_y0 - (int)((scaleH - fb->m_h) / 2);
+                if (newX < 0) newX = 0;
+                if (newY < 0) newY = 0;
+                int newW = (int)scaleW;
+                int newH = (int)scaleH;
+                if (newX + newW >= (int)fullFramebuf->frameImage.w)
+                    newW = fullFramebuf->frameImage.w - newX;
+                if (newY + newH >= (int)fullFramebuf->frameImage.h)
+                    newH = fullFramebuf->frameImage.h - newY;
+                fb->m_x0 = newX;
+                fb->m_y0 = newY;
+                fb->m_w = newW;
+                fb->m_h = newH;
+            }
 
-#if defined(__PROFILE__)
-            u64EndCycle = pmu_get_systick_Count();
-            info("resize cycles %llu \n", (u64EndCycle - u64StartCycle));
-#endif
+            /* --- Step 2: For each face, crop and run mouth model --- */
+            static std::vector<arm::app::face_detection::DetectionResult> s_mouthTemp;
+            for (size_t f = 0; f < fullFramebuf->results_FD.size(); f++)
+            {
+                const auto &faceBox = fullFramebuf->results_FD[f];
+                roi.x = faceBox.m_x0;
+                roi.y = faceBox.m_y0;
+                roi.w = faceBox.m_w;
+                roi.h = faceBox.m_h;
 
-#if defined(__PROFILE__)
-            u64StartCycle = pmu_get_systick_Count();
-#endif
-			/* Model spec: uint8 [0,255] → int8 = uint8 - 128. Use int32 to avoid UB. */
-			auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
-			auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
-			for (size_t i = 0; i < inputTensor->bytes; i++)
-			{
-				int32_t v = static_cast<int32_t>(req_data[i]) - 128;
-				signed_req_data[i] = static_cast<int8_t>(v);
-			}
+                image_t resizeImg;
+                resizeImg.w = inputImgCols;
+                resizeImg.h = inputImgRows;
+                resizeImg.data = (uint8_t *)inputTensor->data.data;
+                resizeImg.pixfmt = PIXFORMAT_RGB888;
+                imlib_nvt_scale(&fullFramebuf->frameImage, &resizeImg, &roi);
 
-#if defined(__PROFILE__)
-            u64EndCycle = pmu_get_systick_Count();
-            info("quantize cycles %llu \n", (u64EndCycle - u64StartCycle));
-#endif
+                auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
+                auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
+                for (size_t i = 0; i < inputTensor->bytes; i++)
+                {
+                    int32_t v = static_cast<int32_t>(req_data[i]) - 128;
+                    signed_req_data[i] = static_cast<int8_t>(v);
+                }
+                model.RunInference();
 
-#if defined(__PROFILE__)
-			profiler.StartProfiling("Inference");
-#endif
+                s_mouthTemp.clear();
+                postProcess.RunPostProcessing(inputImgRows, inputImgCols, (uint32_t)roi.h, (uint32_t)roi.w, s_mouthTemp);
 
-			model.RunInference();
-
-#if defined(__PROFILE__)
-			profiler.StopProfiling();
-			profiler.PrintProfilingResult();
-#endif
+                /* Offset mouth results from face-crop to full-frame coords */
+                for (size_t m = 0; m < s_mouthTemp.size(); m++)
+                {
+                    auto r = s_mouthTemp[m];
+                    r.m_x0 += faceBox.m_x0;
+                    r.m_y0 += faceBox.m_y0;
+                    fullFramebuf->results.push_back(r);
+                }
+            }
 
             fullFramebuf->eState = eFRAMEBUF_INF;
         }
@@ -506,19 +601,8 @@ int main()
 
         if (infFramebuf)
         {
-	#if defined(__PROFILE__)
-			u64StartCycle = pmu_get_systick_Count();
-#endif
-			postProcess.RunPostProcessing(inputImgRows, inputImgCols,
-				infFramebuf->frameImage.h, infFramebuf->frameImage.w,
-				infFramebuf->results);
-
-#if defined(__PROFILE__)
-			u64EndCycle = pmu_get_systick_Count();
-			info("post processing cycles %llu \n", (u64EndCycle - u64StartCycle));
-#endif
-
-            /* Draw mouth detection boxes and labels */
+            /* Draw face boxes and mouth detections */
+			DrawFaceBoxes(infFramebuf->results_FD, &infFramebuf->frameImage);
 			if (infFramebuf->results.size())
 			{
 #if defined(__PROFILE__)

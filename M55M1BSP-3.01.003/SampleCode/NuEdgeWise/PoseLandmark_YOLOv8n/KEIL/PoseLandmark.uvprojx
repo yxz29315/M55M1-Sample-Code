@@ -504,6 +504,11 @@
               <FileType>8</FileType>
               <FilePath>..\MouthYOLOv8PostProcessing.cpp</FilePath>
             </File>
+            <File>
+              <FileName>FaceDetectorPostProcessing.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\FaceDetectorPostProcessing.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -538,6 +543,16 @@
               <FileName>MouthDetectionModel.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\Model\MouthDetectionModel.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>FaceDetectionModel.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Model\FaceDetectionModel.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>face_detection_int8_vela_H256.tflite.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Model\face_detection_int8_vela_H256.tflite.cpp</FilePath>
             </File>
           </Files>
         </Group>
