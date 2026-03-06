@@ -279,83 +279,67 @@ int main()
     BoardInit();
     info("main: BoardInit done, loading model...\n");
 
-	/* Copy model file from SD to HyperRAM*/
-	int32_t i32ModelSize;
-		
-	i32ModelSize = PrepareModelToHyperRAM();
+		// 1) Copy model to HyperRAM
+		int32_t i32ModelSize = PrepareModelToHyperRAM();
+		if (i32ModelSize <= 0) {
+				printf_err("Failed to prepare model\n");
+				return 1;
+		}
 
-	if(i32ModelSize <= 0 )
-	{
-        printf_err("Failed to prepare model\n");
-        return 1;
-	}
+		// 2) Compute model region end (inclusive), aligned to 32B
+		const uint32_t modelBase = MODEL_AT_HYPERRAM_ADDR;
+		const uint32_t modelEnd  = modelBase + (uint32_t)i32ModelSize;          // end-exclusive
+		const uint32_t modelLimit = ((modelEnd + 31u) & ~31u) - 1u;             // end-inclusive, 32B aligned
 
-    /* Ensure SD writes to HyperRAM are visible before CPU reads model */
-    __DSB();
-    __DMB();
+		// 3) Clean D-cache for the area we just wrote (important if it was cacheable)
+		const uint32_t cleanAddr = modelBase & ~31u;
+		const uint32_t cleanLen  = (modelEnd - cleanAddr + 31u) & ~31u;
+		SCB_CleanDCache_by_Addr((uint32_t*)cleanAddr, (int32_t)cleanLen);
+		__DSB(); __ISB();
 
-    /* Sanity check: verify TFLite magic at model start (TFL3 at offset 4) */
-    const uint8_t *pModel = (const uint8_t *)MODEL_AT_HYPERRAM_ADDR;
-    if (i32ModelSize < 12 || pModel[4] != 0x54 || pModel[5] != 0x46 || pModel[6] != 0x4c || pModel[7] != 0x33)
-    {
-        printf_err("Invalid TFLite model at 0x%08x: bad magic or size (len=%d)\n",
-                   (unsigned)MODEL_AT_HYPERRAM_ADDR, (int)i32ModelSize);
-        return 1;
-    }
-    info("Model magic TFL3 OK, readable from HyperRAM\n");
+		// 4) Build MPU config INCLUDING a model region that covers the full model
+		info("Set tensor arena cache policy to WTRA\n");
+		std::vector<ARM_MPU_Region_t> mpuConfig =
+		{
+				{
+						// Tensor arena (WTRA)
+						ARM_MPU_RBAR((uint32_t)arm::app::tensorArena, ARM_MPU_SH_NON, 0, 1, 1),
+						ARM_MPU_RLAR(((uint32_t)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1u,
+												 eMPU_ATTR_CACHEABLE_WTRA)
+				},
+				{
+						// Model in HyperRAM (NON-CACHEABLE) — NOW SIZED TO i32ModelSize
+						ARM_MPU_RBAR(modelBase, ARM_MPU_SH_NON, 0, 1, 1),
+						ARM_MPU_RLAR(modelLimit, eMPU_ATTR_NON_CACHEABLE)
+				},
+				{
+						// fb_array non-cacheable (CCAP DMA)
+						ARM_MPU_RBAR((uint32_t)fb_array, ARM_MPU_SH_NON, 0, 1, 1),
+						ARM_MPU_RLAR(((uint32_t)fb_array) + OMV_FB_SIZE - 1u,
+												 eMPU_ATTR_NON_CACHEABLE)
+				},
+		#if (NUM_FRAMEBUF == 2)
+				{
+						ARM_MPU_RBAR((uint32_t)frame_buf1, ARM_MPU_SH_NON, 0, 1, 1),
+						ARM_MPU_RLAR(((uint32_t)frame_buf1) + OMV_FB_SIZE - 1u,
+												 eMPU_ATTR_NON_CACHEABLE)
+				},
+		#endif
+		};
 
-    /* Model init BEFORE MPU - matches working project (pose + exercise) */
-    arm::app::MouthDetectionModel model;
+		InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
 
-    if (!model.Init(arm::app::tensorArena,
-                    sizeof(arm::app::tensorArena),
-                    (unsigned char *)MODEL_AT_HYPERRAM_ADDR,
-                    i32ModelSize))
-    {
-        printf_err("Failed to initialise model\n");
-        return 1;
-    }
-    info("Model init OK\n");
-
-    /* Setup MPU for tensor arena AFTER model.Init() - same as working project */
-    info("Set tensor arena cache policy to WTRA\n");
-    const std::vector<ARM_MPU_Region_t> mpuConfig =
-    {
-        {
-            // SRAM for tensor arena
-            ARM_MPU_RBAR(((unsigned int)arm::app::tensorArena),        // Base
-                         ARM_MPU_SH_NON,    // Non-shareable
-                         0,                 // Read-only
-                         1,                 // Non-Privileged
-                         1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)arm::app::tensorArena) + ACTIVATION_BUF_SZ - 1),        // Limit
-                         eMPU_ATTR_CACHEABLE_WTRA)
-        },
-        {
-            // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
-            ARM_MPU_RBAR(((unsigned int)fb_array),        // Base
-                         ARM_MPU_SH_NON,    // Non-shareable
-                         0,                 // Read-only
-                         1,                 // Non-Privileged
-                         1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)fb_array) + OMV_FB_SIZE - 1),        // Limit
-                         eMPU_ATTR_NON_CACHEABLE) // NonCache
-        },
-#if (NUM_FRAMEBUF == 2)
-        {
-            // Image data from CCAP DMA, so must set frame buffer to Non-cache attribute
-            ARM_MPU_RBAR(((unsigned int)frame_buf1),        // Base
-                         ARM_MPU_SH_NON,    // Non-shareable
-                         0,                 // Read-only
-                         1,                 // Non-Privileged
-                         1),                // eXecute Never enabled
-            ARM_MPU_RLAR((((unsigned int)frame_buf1) + OMV_FB_SIZE - 1),        // Limit
-                         eMPU_ATTR_NON_CACHEABLE) // NonCache
-        },
-#endif
-    };
-
-    InitPreDefMPURegion(&mpuConfig[0], mpuConfig.size());
+		// 5) Now init model
+		arm::app::MouthDetectionModel model;
+		if (!model.Init(arm::app::tensorArena,
+										sizeof(arm::app::tensorArena),
+										(unsigned char*)MODEL_AT_HYPERRAM_ADDR,
+										i32ModelSize))
+		{
+				printf_err("Failed to initialise model\n");
+				return 1;
+		}
+		info("Model init OK\n");
 
     TfLiteTensor *inputTensor   = model.GetInputTensor(0);
 
