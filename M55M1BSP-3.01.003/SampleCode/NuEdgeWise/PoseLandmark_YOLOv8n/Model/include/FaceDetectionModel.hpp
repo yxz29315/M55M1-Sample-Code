@@ -10,9 +10,22 @@
 #define FACE_DETECTION_MODEL_HPP
 
 #include "Model.hpp"
+#include <cstddef>
 
 extern const float anchor1[];
 extern const float anchor2[];
+
+namespace arm
+{
+namespace app
+{
+namespace face_detection
+{
+    const uint8_t *GetModelPointer();
+    size_t GetModelLen();
+} /* namespace face_detection */
+} /* namespace app */
+} /* namespace arm */
 
 namespace arm
 {
