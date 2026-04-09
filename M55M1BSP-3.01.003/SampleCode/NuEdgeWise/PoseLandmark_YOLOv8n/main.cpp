@@ -61,12 +61,15 @@ typedef enum
     eFRAMEBUF_INF
 } E_FRAMEBUF_STATE;
 
+#define MAX_TRACKED_FACES 4
+
 typedef struct
 {
     E_FRAMEBUF_STATE eState;
     image_t frameImage;
     std::vector<arm::app::face_detection::DetectionResult> results_FD;  /* face boxes */
     std::vector<arm::app::face_detection::DetectionResult> results;       /* mouth detections */
+    bool faceMouthOpen[MAX_TRACKED_FACES];  /* per-face raw mouth-open flag */
 } S_FRAMEBUF;
 
 
@@ -198,54 +201,117 @@ static void omv_init()
 #endif
 }
 
-static bool g_isSpeaking = false;
-static int  g_speakingCounter = 0;
+struct TrackedFace {
+    float cx, cy;
+    bool  isSpeaking;
+    int   counter;
+    int   missedFrames;
+};
 
-static bool SmoothSpeakingState(bool rawMouthOpen)
+static TrackedFace g_tracked[MAX_TRACKED_FACES];
+static bool g_trackedInit = false;
+
+static void InitTrackedFaces()
 {
-    if (rawMouthOpen) {
-        if (!g_isSpeaking) {
-            g_speakingCounter++;
-            if (g_speakingCounter >= SPEAKING_HYSTERESIS_ON) {
-                g_isSpeaking = true;
-                g_speakingCounter = 0;
-            }
-        } else {
-            g_speakingCounter = 0;
-        }
-    } else {
-        if (g_isSpeaking) {
-            g_speakingCounter++;
-            if (g_speakingCounter >= SPEAKING_HYSTERESIS_OFF) {
-                g_isSpeaking = false;
-                g_speakingCounter = 0;
-            }
-        } else {
-            g_speakingCounter = 0;
-        }
+    int i;
+    for (i = 0; i < MAX_TRACKED_FACES; i++) {
+        g_tracked[i].cx = -1.f;
+        g_tracked[i].cy = -1.f;
+        g_tracked[i].isSpeaking = false;
+        g_tracked[i].counter = 0;
+        g_tracked[i].missedFrames = 99;
     }
-    return g_isSpeaking;
+    g_trackedInit = true;
 }
 
-static void DrawFaceWithState(
+static int MatchOrCreateSlot(float cx, float cy)
+{
+    int bestSlot = -1;
+    float bestDist = 9999999.f;
+    int i;
+
+    for (i = 0; i < MAX_TRACKED_FACES; i++) {
+        if (g_tracked[i].missedFrames < 10) {
+            float dx = g_tracked[i].cx - cx;
+            float dy = g_tracked[i].cy - cy;
+            float dist = dx * dx + dy * dy;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestSlot = i;
+            }
+        }
+    }
+
+    /* Accept match if center moved less than 80 pixels */
+    if (bestSlot >= 0 && bestDist < (80.f * 80.f))
+        return bestSlot;
+
+    /* No match — find an empty or oldest slot */
+    int oldestSlot = 0;
+    int oldestMissed = -1;
+    for (i = 0; i < MAX_TRACKED_FACES; i++) {
+        if (g_tracked[i].missedFrames >= 10) {
+            g_tracked[i].isSpeaking = false;
+            g_tracked[i].counter = 0;
+            return i;
+        }
+        if (g_tracked[i].missedFrames > oldestMissed) {
+            oldestMissed = g_tracked[i].missedFrames;
+            oldestSlot = i;
+        }
+    }
+    g_tracked[oldestSlot].isSpeaking = false;
+    g_tracked[oldestSlot].counter = 0;
+    return oldestSlot;
+}
+
+static bool SmoothPerFace(int slot, bool rawMouthOpen)
+{
+    if (rawMouthOpen) {
+        if (!g_tracked[slot].isSpeaking) {
+            g_tracked[slot].counter++;
+            if (g_tracked[slot].counter >= SPEAKING_HYSTERESIS_ON) {
+                g_tracked[slot].isSpeaking = true;
+                g_tracked[slot].counter = 0;
+            }
+        } else {
+            g_tracked[slot].counter = 0;
+        }
+    } else {
+        if (g_tracked[slot].isSpeaking) {
+            g_tracked[slot].counter++;
+            if (g_tracked[slot].counter >= SPEAKING_HYSTERESIS_OFF) {
+                g_tracked[slot].isSpeaking = false;
+                g_tracked[slot].counter = 0;
+            }
+        } else {
+            g_tracked[slot].counter = 0;
+        }
+    }
+    return g_tracked[slot].isSpeaking;
+}
+
+static void DrawFacesPerState(
     const std::vector<arm::app::face_detection::DetectionResult> &faceResults,
-    bool isSpeaking,
+    const bool perFaceSpeaking[],
     image_t *drawImg
 )
 {
     int greenBox = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);
     int redBox   = COLOR_R5_G6_B5_TO_RGB565(COLOR_R5_MAX, 0, 0);
-    int boxColor = isSpeaking ? greenBox : redBox;
-    const char *label = isSpeaking ? "Speaking" : "Not Speaking";
-    int labelColor = isSpeaking ? greenBox : redBox;
+    size_t i;
 
-    for (size_t i = 0; i < faceResults.size(); i++)
+    for (i = 0; i < faceResults.size(); i++)
     {
+        bool speaking = perFaceSpeaking[i];
+        int boxColor = speaking ? greenBox : redBox;
+        const char *label = speaking ? "Speaking" : "Not Speaking";
+
         const auto &r = faceResults[i];
         imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, boxColor, 2, false);
 
         int labelY = (r.m_y0 - 14 > 0) ? (r.m_y0 - 14) : r.m_y0;
-        imlib_draw_string(drawImg, r.m_x0, labelY, label, labelColor, 2, 0, 0, false,
+        imlib_draw_string(drawImg, r.m_x0, labelY, label, boxColor, 2, 0, 0, false,
                           false, false, false, 0, false, false);
     }
 }
@@ -587,40 +653,58 @@ int main()
 
             /* --- Step 2: For each face, crop and run mouth model --- */
             static std::vector<arm::app::face_detection::DetectionResult> s_mouthTemp;
-            for (size_t f = 0; f < fullFramebuf->results_FD.size(); f++)
             {
-                const auto &faceBox = fullFramebuf->results_FD[f];
-                roi.x = faceBox.m_x0;
-                roi.y = faceBox.m_y0;
-                roi.w = faceBox.m_w;
-                roi.h = faceBox.m_h;
+                size_t f;
+                size_t maxFaces = fullFramebuf->results_FD.size();
+                if (maxFaces > MAX_TRACKED_FACES) maxFaces = MAX_TRACKED_FACES;
 
-                image_t resizeImg;
-                resizeImg.w = inputImgCols;
-                resizeImg.h = inputImgRows;
-                resizeImg.data = (uint8_t *)inputTensor->data.data;
-                resizeImg.pixfmt = PIXFORMAT_RGB888;
-                imlib_nvt_scale(&fullFramebuf->frameImage, &resizeImg, &roi);
+                for (f = 0; f < MAX_TRACKED_FACES; f++)
+                    fullFramebuf->faceMouthOpen[f] = false;
 
-                auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
-                auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
-                for (size_t i = 0; i < inputTensor->bytes; i++)
+                for (f = 0; f < maxFaces; f++)
                 {
-                    int32_t v = static_cast<int32_t>(req_data[i]) - 128;
-                    signed_req_data[i] = static_cast<int8_t>(v);
-                }
-                model.RunInference();
+                    const auto &faceBox = fullFramebuf->results_FD[f];
+                    roi.x = faceBox.m_x0;
+                    roi.y = faceBox.m_y0;
+                    roi.w = faceBox.m_w;
+                    roi.h = faceBox.m_h;
 
-                s_mouthTemp.clear();
-                postProcess.RunPostProcessing(inputImgRows, inputImgCols, (uint32_t)roi.h, (uint32_t)roi.w, s_mouthTemp);
+                    image_t resizeImg;
+                    resizeImg.w = inputImgCols;
+                    resizeImg.h = inputImgRows;
+                    resizeImg.data = (uint8_t *)inputTensor->data.data;
+                    resizeImg.pixfmt = PIXFORMAT_RGB888;
+                    imlib_nvt_scale(&fullFramebuf->frameImage, &resizeImg, &roi);
 
-                /* Offset mouth results from face-crop to full-frame coords */
-                for (size_t m = 0; m < s_mouthTemp.size(); m++)
-                {
-                    auto r = s_mouthTemp[m];
-                    r.m_x0 += faceBox.m_x0;
-                    r.m_y0 += faceBox.m_y0;
-                    fullFramebuf->results.push_back(r);
+                    auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
+                    auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
+                    for (size_t i = 0; i < inputTensor->bytes; i++)
+                    {
+                        int32_t v = static_cast<int32_t>(req_data[i]) - 128;
+                        signed_req_data[i] = static_cast<int8_t>(v);
+                    }
+                    model.RunInference();
+
+                    s_mouthTemp.clear();
+                    postProcess.RunPostProcessing(inputImgRows, inputImgCols, (uint32_t)roi.h, (uint32_t)roi.w, s_mouthTemp);
+
+                    /* Check if this face has mouth open */
+                    size_t m;
+                    for (m = 0; m < s_mouthTemp.size(); m++) {
+                        if (s_mouthTemp[m].m_classId == 1) {
+                            fullFramebuf->faceMouthOpen[f] = true;
+                            break;
+                        }
+                    }
+
+                    /* Offset mouth results to full-frame coords */
+                    for (m = 0; m < s_mouthTemp.size(); m++)
+                    {
+                        auto r = s_mouthTemp[m];
+                        r.m_x0 += faceBox.m_x0;
+                        r.m_y0 += faceBox.m_y0;
+                        fullFramebuf->results.push_back(r);
+                    }
                 }
             }
 
@@ -630,27 +714,39 @@ int main()
 
         if (infFramebuf)
         {
-            /* Determine raw mouth-open state: any detection with classId==1 means mouth open */
-            bool rawMouthOpen = false;
+            if (!g_trackedInit) InitTrackedFaces();
+
+            /* Per-face: match to tracked slots, smooth, build per-face speaking array */
+            bool perFaceSpeaking[MAX_TRACKED_FACES];
             {
-                size_t mi;
-                for (mi = 0; mi < infFramebuf->results.size(); mi++) {
-                    if (infFramebuf->results[mi].m_classId == 1) {
-                        rawMouthOpen = true;
-                        break;
-                    }
+                size_t fi;
+                int i;
+
+                /* Age all tracked faces */
+                for (i = 0; i < MAX_TRACKED_FACES; i++)
+                    g_tracked[i].missedFrames++;
+
+                size_t numFaces = infFramebuf->results_FD.size();
+                if (numFaces > MAX_TRACKED_FACES) numFaces = MAX_TRACKED_FACES;
+
+                for (fi = 0; fi < numFaces; fi++) {
+                    const auto &r = infFramebuf->results_FD[fi];
+                    float cx = r.m_x0 + r.m_w * 0.5f;
+                    float cy = r.m_y0 + r.m_h * 0.5f;
+
+                    int slot = MatchOrCreateSlot(cx, cy);
+                    g_tracked[slot].cx = cx;
+                    g_tracked[slot].cy = cy;
+                    g_tracked[slot].missedFrames = 0;
+
+                    perFaceSpeaking[fi] = SmoothPerFace(slot, infFramebuf->faceMouthOpen[fi]);
                 }
             }
-
-            /* If no face detected this frame, keep previous smoothed state (don't reset) */
-            bool speaking = g_isSpeaking;
-            if (infFramebuf->results_FD.size() > 0)
-                speaking = SmoothSpeakingState(rawMouthOpen);
 
 #if defined(__PROFILE__)
 			u64StartCycle = pmu_get_systick_Count();
 #endif
-            DrawFaceWithState(infFramebuf->results_FD, speaking, &infFramebuf->frameImage);
+            DrawFacesPerState(infFramebuf->results_FD, perFaceSpeaking, &infFramebuf->frameImage);
 #if defined(__PROFILE__)
 			u64EndCycle = pmu_get_systick_Count();
 			info("draw cycles %llu \n", (u64EndCycle - u64StartCycle));
