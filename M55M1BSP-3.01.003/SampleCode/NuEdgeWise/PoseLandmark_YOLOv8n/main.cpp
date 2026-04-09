@@ -583,22 +583,22 @@ int main()
                 auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
                 auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
 
-                /* One-time diagnostic: dump first 12 RGB pixels before quantisation */
+                /* One-time diagnostic: dump first few RGB pixels before quantisation */
                 {
                     static bool s_dumpedOnce = false;
                     if (!s_dumpedOnce) {
                         s_dumpedOnce = true;
+                        int diagPx;
                         info("DIAG face crop roi=(%d,%d %dx%d) -> mouth input %dx%d\n",
                              roi.x, roi.y, roi.w, roi.h, inputImgCols, inputImgRows);
                         info("DIAG first 12 RGB pixels (uint8, before quant):\n");
-                        for (int px = 0; px < 12; px++)
-                            info("  px%d: R=%u G=%u B=%u\n", px,
-                                 req_data[px*3+0], req_data[px*3+1], req_data[px*3+2]);
-                        info("DIAG center pixel [%d]: R=%u G=%u B=%u\n",
-                             (inputImgRows/2)*inputImgCols + inputImgCols/2,
-                             req_data[((inputImgRows/2)*inputImgCols + inputImgCols/2)*3 + 0],
-                             req_data[((inputImgRows/2)*inputImgCols + inputImgCols/2)*3 + 1],
-                             req_data[((inputImgRows/2)*inputImgCols + inputImgCols/2)*3 + 2]);
+                        for (diagPx = 0; diagPx < 12; diagPx++) {
+                            info("  px%d: R=%u G=%u B=%u\n", diagPx,
+                                 req_data[diagPx*3+0], req_data[diagPx*3+1], req_data[diagPx*3+2]);
+                        }
+                        int cIdx = ((inputImgRows/2)*inputImgCols + inputImgCols/2) * 3;
+                        info("DIAG center pixel: R=%u G=%u B=%u\n",
+                             req_data[cIdx], req_data[cIdx+1], req_data[cIdx+2]);
                     }
                 }
 
@@ -614,15 +614,20 @@ int main()
                     static bool s_dumpedOut = false;
                     if (!s_dumpedOut) {
                         s_dumpedOut = true;
-                        for (int t = 0; t < 6; t++) {
-                            TfLiteTensor *ot = model.GetOutputTensor(t);
-                            info("DIAG out[%d] shape=[%d,%d,%d] scale=%.6f zp=%d first8: ",
-                                 t, ot->dims->data[0], ot->dims->data[1], ot->dims->data[2],
-                                 ((TfLiteAffineQuantization*)(ot->quantization.params))->scale->data[0],
-                                 ((TfLiteAffineQuantization*)(ot->quantization.params))->zero_point->data[0]);
+                        int diagT, diagK;
+                        for (diagT = 0; diagT < 6; diagT++) {
+                            TfLiteTensor *ot = model.GetOutputTensor(diagT);
+                            float otScale = ((TfLiteAffineQuantization*)(ot->quantization.params))->scale->data[0];
+                            int otZp = ((TfLiteAffineQuantization*)(ot->quantization.params))->zero_point->data[0];
+                            info("DIAG out[%d] shape=[%d,%d,%d] scale=%.6f zp=%d\n",
+                                 diagT, ot->dims->data[0], ot->dims->data[1], ot->dims->data[2],
+                                 otScale, otZp);
                             int8_t *d = ot->data.int8;
-                            for (int k = 0; k < 8 && k < (int)ot->bytes; k++)
-                                info("%d ", (int)d[k]);
+                            int diagMax = 8;
+                            if (diagMax > (int)ot->bytes) diagMax = (int)ot->bytes;
+                            for (diagK = 0; diagK < diagMax; diagK++) {
+                                info("  [%d]=%d", diagK, (int)d[diagK]);
+                            }
                             info("\n");
                         }
                     }
