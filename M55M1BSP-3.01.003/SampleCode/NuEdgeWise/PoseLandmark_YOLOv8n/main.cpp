@@ -46,7 +46,7 @@
 /* Same as working project: 0x82400000 (exercise model works at this addr) */
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
-#define MOUTH_DETECTION_THRESHOLD  				(0.25f)
+#define MOUTH_DETECTION_THRESHOLD  				(0.05f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
 #define FACE_PRESENCE_THRESHOLD  				(0.4f)
 
