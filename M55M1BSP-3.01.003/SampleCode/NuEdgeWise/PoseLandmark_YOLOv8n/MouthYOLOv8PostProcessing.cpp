@@ -20,12 +20,13 @@ using namespace arm::app::mouth_detection;
 
 static void AnchorMatrixConstruct(
     std::vector<AnchorBox> &vAnchorBoxs,
+    int inputSpatialSize,
     int i32Stride,
     int i32StrideTotalAnchors
 )
 {
     float fStartAnchorValue = 0.5f;
-    int iMaxAnchorValue = MOUTH_INPUT_SIZE / i32Stride;
+    int iMaxAnchorValue = inputSpatialSize / i32Stride;
     float fAnchor0StepValue = 0.f;
     float fAnchor1StepValue = -1.f;
 
@@ -242,22 +243,43 @@ namespace mouth_detection
 MouthYOLOv8PostProcessing::MouthYOLOv8PostProcessing(
     arm::app::MouthDetectionModel *model,
     float threshold,
-    float iouThreshold)
+    float iouThreshold,
+    int inputSpatialSize)
     : m_model(model),
       m_threshold(threshold),
-      m_iouThreshold(iouThreshold)
+      m_iouThreshold(iouThreshold),
+      m_inputSpatialSize(inputSpatialSize)
 {
-    m_stride8_total_anchors = static_cast<int>(std::pow(MOUTH_INPUT_SIZE / MOUTH_STRIDE_8, 2));   /* 576 */
-    m_stride16_total_anchors = static_cast<int>(std::pow(MOUTH_INPUT_SIZE / MOUTH_STRIDE_16, 2)); /* 144 */
-    m_stride32_total_anchors = static_cast<int>(std::pow(MOUTH_INPUT_SIZE / MOUTH_STRIDE_32, 2));/* 36 */
+    m_stride8_total_anchors = static_cast<int>(std::pow(m_inputSpatialSize / MOUTH_STRIDE_8, 2));
+    m_stride16_total_anchors = static_cast<int>(std::pow(m_inputSpatialSize / MOUTH_STRIDE_16, 2));
+    m_stride32_total_anchors = static_cast<int>(std::pow(m_inputSpatialSize / MOUTH_STRIDE_32, 2));
 
     m_stride8_anchors.clear();
     m_stride16_anchors.clear();
     m_stride32_anchors.clear();
 
-    AnchorMatrixConstruct(m_stride8_anchors, MOUTH_STRIDE_8, m_stride8_total_anchors);
-    AnchorMatrixConstruct(m_stride16_anchors, MOUTH_STRIDE_16, m_stride16_total_anchors);
-    AnchorMatrixConstruct(m_stride32_anchors, MOUTH_STRIDE_32, m_stride32_total_anchors);
+    AnchorMatrixConstruct(m_stride8_anchors, m_inputSpatialSize, MOUTH_STRIDE_8, m_stride8_total_anchors);
+    AnchorMatrixConstruct(m_stride16_anchors, m_inputSpatialSize, MOUTH_STRIDE_16, m_stride16_total_anchors);
+    AnchorMatrixConstruct(m_stride32_anchors, m_inputSpatialSize, MOUTH_STRIDE_32, m_stride32_total_anchors);
+
+    if (m_model)
+    {
+        auto ok = [&](int clsIdx, int boxIdx, int expectAnchors) -> bool {
+            TfLiteTensor *c = m_model->GetOutputTensor(clsIdx);
+            TfLiteTensor *b = m_model->GetOutputTensor(boxIdx);
+            return c && b && c->dims && b->dims && c->dims->size >= 3 && b->dims->size >= 3
+                && c->dims->data[1] == expectAnchors && b->dims->data[1] == expectAnchors
+                && c->dims->data[2] == MOUTH_NUM_CLASSES && b->dims->data[2] == 64;
+        };
+        if (!ok(MOUTH_CLS_P3_INDEX, MOUTH_BOX_P3_INDEX, m_stride8_total_anchors)
+            || !ok(MOUTH_CLS_P4_INDEX, MOUTH_BOX_P4_INDEX, m_stride16_total_anchors)
+            || !ok(MOUTH_CLS_P5_INDEX, MOUTH_BOX_P5_INDEX, m_stride32_total_anchors))
+        {
+            printf_err("Mouth PP: output shapes vs inputSpatialSize=%d (P3=%d P4=%d P5=%d) mismatch\n",
+                       m_inputSpatialSize, m_stride8_total_anchors, m_stride16_total_anchors,
+                       m_stride32_total_anchors);
+        }
+    }
 }
 
 void MouthYOLOv8PostProcessing::RunPostProcessing(
@@ -269,8 +291,8 @@ void MouthYOLOv8PostProcessing::RunPostProcessing(
 {
     (void)imgNetRows;
     (void)imgNetCols;
-    float fXScale = static_cast<float>(imgSrcCols) / static_cast<float>(MOUTH_INPUT_SIZE);
-    float fYScale = static_cast<float>(imgSrcRows) / static_cast<float>(MOUTH_INPUT_SIZE);
+    float fXScale = static_cast<float>(imgSrcCols) / static_cast<float>(m_inputSpatialSize);
+    float fYScale = static_cast<float>(imgSrcRows) / static_cast<float>(m_inputSpatialSize);
 
     /* Debug: scan raw cls tensors for max sigmoid value (before threshold filter) */
 #if MOUTH_DEBUG_MAX_CONF

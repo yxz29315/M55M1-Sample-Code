@@ -2,7 +2,7 @@
  * @file     MouthDetectionModel.hpp
  * @version  V1.00
  * @brief    Mouth detection model (YOLOv8n ReLU6) header file.
- *           Input: 192x192 RGB, int8 = uint8 - 128
+ *           Input: square RGB (e.g. 128x128), int8 = uint8 - 128
  *           Output: 6 tensors (box P3/P4/P5, cls P3/P4/P5), DFL reg_max=16
  *           Classes: 0 = mouth closed, 1 = mouth open
  *

@@ -414,6 +414,12 @@ int main()
     const int inputImgRows = inputShape->data[arm::app::MouthDetectionModel::ms_inputRowsIdx];
     const uint32_t nChannels = inputShape->data[arm::app::MouthDetectionModel::ms_inputChannelsIdx];
 
+    if (inputImgRows != inputImgCols)
+    {
+        printf_err("Mouth model input must be square (got %dx%d)\n", inputImgRows, inputImgCols);
+        return 4;
+    }
+
     arm::app::QuantParams inQuantParams = arm::app::GetTensorQuantParams(inputTensor);
 
     /* Face detection: input 192x192 grayscale */
@@ -437,10 +443,11 @@ int main()
     arm::app::FaceDetectorPostProcess postProcess_FD(outputTensor0_FD, outputTensor1_FD,
         s_asFramebuf[0].results_FD, postProcessParams_FD);
 
-    /* Mouth detection post-processing (YOLOv8n DFL, 6 outputs) */
+    /* Mouth PP anchor grids must match trained input size (e.g. 128 vs 192) */
     arm::app::mouth_detection::MouthYOLOv8PostProcessing postProcess(&model,
         MOUTH_DETECTION_THRESHOLD,
-        MOUTH_NMS_THRESHOLD);
+        MOUTH_NMS_THRESHOLD,
+        inputImgRows);
 	
     //display framebuffer
     image_t frameBuffer;
@@ -575,12 +582,51 @@ int main()
 
                 auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
                 auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
+
+                /* One-time diagnostic: dump first 12 RGB pixels before quantisation */
+                {
+                    static bool s_dumpedOnce = false;
+                    if (!s_dumpedOnce) {
+                        s_dumpedOnce = true;
+                        info("DIAG face crop roi=(%d,%d %dx%d) -> mouth input %dx%d\n",
+                             roi.x, roi.y, roi.w, roi.h, inputImgCols, inputImgRows);
+                        info("DIAG first 12 RGB pixels (uint8, before quant):\n");
+                        for (int px = 0; px < 12; px++)
+                            info("  px%d: R=%u G=%u B=%u\n", px,
+                                 req_data[px*3+0], req_data[px*3+1], req_data[px*3+2]);
+                        info("DIAG center pixel [%d]: R=%u G=%u B=%u\n",
+                             (inputImgRows/2)*inputImgCols + inputImgCols/2,
+                             req_data[((inputImgRows/2)*inputImgCols + inputImgCols/2)*3 + 0],
+                             req_data[((inputImgRows/2)*inputImgCols + inputImgCols/2)*3 + 1],
+                             req_data[((inputImgRows/2)*inputImgCols + inputImgCols/2)*3 + 2]);
+                    }
+                }
+
                 for (size_t i = 0; i < inputTensor->bytes; i++)
                 {
                     int32_t v = static_cast<int32_t>(req_data[i]) - 128;
                     signed_req_data[i] = static_cast<int8_t>(v);
                 }
                 model.RunInference();
+
+                /* One-time diagnostic: dump output tensor shapes + first few values */
+                {
+                    static bool s_dumpedOut = false;
+                    if (!s_dumpedOut) {
+                        s_dumpedOut = true;
+                        for (int t = 0; t < 6; t++) {
+                            TfLiteTensor *ot = model.GetOutputTensor(t);
+                            info("DIAG out[%d] shape=[%d,%d,%d] scale=%.6f zp=%d first8: ",
+                                 t, ot->dims->data[0], ot->dims->data[1], ot->dims->data[2],
+                                 ((TfLiteAffineQuantization*)(ot->quantization.params))->scale->data[0],
+                                 ((TfLiteAffineQuantization*)(ot->quantization.params))->zero_point->data[0]);
+                            int8_t *d = ot->data.int8;
+                            for (int k = 0; k < 8 && k < (int)ot->bytes; k++)
+                                info("%d ", (int)d[k]);
+                            info("\n");
+                        }
+                    }
+                }
 
                 s_mouthTemp.clear();
                 postProcess.RunPostProcessing(inputImgRows, inputImgCols, (uint32_t)roi.h, (uint32_t)roi.w, s_mouthTemp);
