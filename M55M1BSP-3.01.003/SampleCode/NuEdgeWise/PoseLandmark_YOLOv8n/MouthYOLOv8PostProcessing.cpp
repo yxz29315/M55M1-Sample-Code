@@ -16,7 +16,7 @@
 using namespace arm::app::mouth_detection;
 
 /* Debug: set to 1 to log raw max confidence from tensor (before threshold) */
-#define MOUTH_DEBUG_MAX_CONF 1
+#define MOUTH_DEBUG_MAX_CONF 0
 
 static void AnchorMatrixConstruct(
     std::vector<AnchorBox> &vAnchorBoxs,

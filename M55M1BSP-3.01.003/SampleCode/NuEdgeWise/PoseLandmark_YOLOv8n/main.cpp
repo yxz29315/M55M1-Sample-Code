@@ -46,9 +46,13 @@
 /* Same as working project: 0x82400000 (exercise model works at this addr) */
 #define MODEL_AT_HYPERRAM_ADDR (0x82400000)
 
-#define MOUTH_DETECTION_THRESHOLD  				(0.05f)   /* lowered for debugging – raise to 0.25 when working */
+#define MOUTH_DETECTION_THRESHOLD  				(0.25f)
 #define MOUTH_NMS_THRESHOLD  					(0.45f)
 #define FACE_PRESENCE_THRESHOLD  				(0.4f)
+
+/* Temporal smoothing: require N consecutive agreeing frames before switching state */
+#define SPEAKING_HYSTERESIS_ON   3   /* frames of "mouth open" to switch to Speaking */
+#define SPEAKING_HYSTERESIS_OFF  4   /* frames of "mouth closed" to switch to Not Speaking */
 
 typedef enum
 {
@@ -194,38 +198,56 @@ static void omv_init()
 #endif
 }
 
-static const char *MOUTH_LABELS[] = { "mouth closed", "mouth open" };
+static bool g_isSpeaking = false;
+static int  g_speakingCounter = 0;
 
-static void DrawFaceBoxes(
-    const std::vector<arm::app::face_detection::DetectionResult> &results,
-    image_t *drawImg
-)
+static bool SmoothSpeakingState(bool rawMouthOpen)
 {
-    int faceColor = COLOR_R5_G6_B5_TO_RGB565(COLOR_R5_MAX, 0, 0);
-    for (size_t i = 0; i < results.size(); i++)
-    {
-        const auto &r = results[i];
-        imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, faceColor, 2, false);
+    if (rawMouthOpen) {
+        if (!g_isSpeaking) {
+            g_speakingCounter++;
+            if (g_speakingCounter >= SPEAKING_HYSTERESIS_ON) {
+                g_isSpeaking = true;
+                g_speakingCounter = 0;
+            }
+        } else {
+            g_speakingCounter = 0;
+        }
+    } else {
+        if (g_isSpeaking) {
+            g_speakingCounter++;
+            if (g_speakingCounter >= SPEAKING_HYSTERESIS_OFF) {
+                g_isSpeaking = false;
+                g_speakingCounter = 0;
+            }
+        } else {
+            g_speakingCounter = 0;
+        }
     }
+    return g_isSpeaking;
 }
 
-static void DrawMouthDetections(
-    const std::vector<arm::app::face_detection::DetectionResult> &results,
+static void DrawFaceWithState(
+    const std::vector<arm::app::face_detection::DetectionResult> &faceResults,
+    bool isSpeaking,
     image_t *drawImg
 )
 {
-	int boxColor = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);
-	int labelY;
+    int greenBox = COLOR_R5_G6_B5_TO_RGB565(0, COLOR_G6_MAX, 0);
+    int redBox   = COLOR_R5_G6_B5_TO_RGB565(COLOR_R5_MAX, 0, 0);
+    int boxColor = isSpeaking ? greenBox : redBox;
+    const char *label = isSpeaking ? "Speaking" : "Not Speaking";
+    int labelColor = isSpeaking ? greenBox : redBox;
 
-	for (size_t i = 0; i < results.size(); i++)
-	{
-		const auto &r = results[i];
-		imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, boxColor, 2, false);
+    for (size_t i = 0; i < faceResults.size(); i++)
+    {
+        const auto &r = faceResults[i];
+        imlib_draw_rectangle(drawImg, r.m_x0, r.m_y0, r.m_w, r.m_h, boxColor, 2, false);
 
-		labelY = (r.m_y0 - 14 > 0) ? (r.m_y0 - 14) : r.m_y0;
-		imlib_draw_string(drawImg, r.m_x0, labelY, MOUTH_LABELS[r.m_classId], COLOR_B5_MAX, 2, 0, 0, false,
-		                  false, false, false, 0, false, false);
-	}
+        int labelY = (r.m_y0 - 14 > 0) ? (r.m_y0 - 14) : r.m_y0;
+        imlib_draw_string(drawImg, r.m_x0, labelY, label, labelColor, 2, 0, 0, false,
+                          false, false, false, 0, false, false);
+    }
 }
 
 static int32_t PrepareModelToHyperRAM(void)
@@ -582,56 +604,12 @@ int main()
 
                 auto *req_data = static_cast<uint8_t *>(inputTensor->data.data);
                 auto *signed_req_data = static_cast<int8_t *>(inputTensor->data.data);
-
-                /* One-time diagnostic: dump first few RGB pixels before quantisation */
-                {
-                    static bool s_dumpedOnce = false;
-                    if (!s_dumpedOnce) {
-                        s_dumpedOnce = true;
-                        int diagPx;
-                        info("DIAG face crop roi=(%d,%d %dx%d) -> mouth input %dx%d\n",
-                             roi.x, roi.y, roi.w, roi.h, inputImgCols, inputImgRows);
-                        info("DIAG first 12 RGB pixels (uint8, before quant):\n");
-                        for (diagPx = 0; diagPx < 12; diagPx++) {
-                            info("  px%d: R=%u G=%u B=%u\n", diagPx,
-                                 req_data[diagPx*3+0], req_data[diagPx*3+1], req_data[diagPx*3+2]);
-                        }
-                        int cIdx = ((inputImgRows/2)*inputImgCols + inputImgCols/2) * 3;
-                        info("DIAG center pixel: R=%u G=%u B=%u\n",
-                             req_data[cIdx], req_data[cIdx+1], req_data[cIdx+2]);
-                    }
-                }
-
                 for (size_t i = 0; i < inputTensor->bytes; i++)
                 {
                     int32_t v = static_cast<int32_t>(req_data[i]) - 128;
                     signed_req_data[i] = static_cast<int8_t>(v);
                 }
                 model.RunInference();
-
-                /* One-time diagnostic: dump output tensor shapes + first few values */
-                {
-                    static bool s_dumpedOut = false;
-                    if (!s_dumpedOut) {
-                        s_dumpedOut = true;
-                        int diagT, diagK;
-                        for (diagT = 0; diagT < 6; diagT++) {
-                            TfLiteTensor *ot = model.GetOutputTensor(diagT);
-                            float otScale = ((TfLiteAffineQuantization*)(ot->quantization.params))->scale->data[0];
-                            int otZp = ((TfLiteAffineQuantization*)(ot->quantization.params))->zero_point->data[0];
-                            info("DIAG out[%d] shape=[%d,%d,%d] scale=%.6f zp=%d\n",
-                                 diagT, ot->dims->data[0], ot->dims->data[1], ot->dims->data[2],
-                                 otScale, otZp);
-                            int8_t *d = ot->data.int8;
-                            int diagMax = 8;
-                            if (diagMax > (int)ot->bytes) diagMax = (int)ot->bytes;
-                            for (diagK = 0; diagK < diagMax; diagK++) {
-                                info("  [%d]=%d", diagK, (int)d[diagK]);
-                            }
-                            info("\n");
-                        }
-                    }
-                }
 
                 s_mouthTemp.clear();
                 postProcess.RunPostProcessing(inputImgRows, inputImgCols, (uint32_t)roi.h, (uint32_t)roi.w, s_mouthTemp);
@@ -646,35 +624,37 @@ int main()
                 }
             }
 
-            /* Debug: log face/mouth counts periodically */
-            {
-                static int dbgFrame = 0;
-                if (++dbgFrame >= 60) {
-                    dbgFrame = 0;
-                    info("faces=%zu mouth=%zu\n",
-                         fullFramebuf->results_FD.size(), fullFramebuf->results.size());
-                }
-            }
-
             fullFramebuf->eState = eFRAMEBUF_INF;
         }
         infFramebuf = get_inf_framebuf();
 
         if (infFramebuf)
         {
-            /* Draw face boxes and mouth detections */
-			DrawFaceBoxes(infFramebuf->results_FD, &infFramebuf->frameImage);
-			if (infFramebuf->results.size())
-			{
+            /* Determine raw mouth-open state: any detection with classId==1 means mouth open */
+            bool rawMouthOpen = false;
+            {
+                size_t mi;
+                for (mi = 0; mi < infFramebuf->results.size(); mi++) {
+                    if (infFramebuf->results[mi].m_classId == 1) {
+                        rawMouthOpen = true;
+                        break;
+                    }
+                }
+            }
+
+            /* If no face detected this frame, keep previous smoothed state (don't reset) */
+            bool speaking = g_isSpeaking;
+            if (infFramebuf->results_FD.size() > 0)
+                speaking = SmoothSpeakingState(rawMouthOpen);
+
 #if defined(__PROFILE__)
-				u64StartCycle = pmu_get_systick_Count();
+			u64StartCycle = pmu_get_systick_Count();
 #endif
-				DrawMouthDetections(infFramebuf->results, &infFramebuf->frameImage);
+            DrawFaceWithState(infFramebuf->results_FD, speaking, &infFramebuf->frameImage);
 #if defined(__PROFILE__)
-				u64EndCycle = pmu_get_systick_Count();
-				info("draw mouth detections cycles %llu \n", (u64EndCycle - u64StartCycle));
+			u64EndCycle = pmu_get_systick_Count();
+			info("draw cycles %llu \n", (u64EndCycle - u64StartCycle));
 #endif
-			}
 
             //display result image
 #if defined (__USE_DISPLAY__)
