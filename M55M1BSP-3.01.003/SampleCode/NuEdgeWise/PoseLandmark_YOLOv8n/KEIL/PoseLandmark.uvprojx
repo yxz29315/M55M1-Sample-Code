@@ -509,6 +509,11 @@
               <FileType>8</FileType>
               <FilePath>..\FaceDetectorPostProcessing.cpp</FilePath>
             </File>
+            <File>
+              <FileName>SpeakingDetector.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\SpeakingDetector.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
